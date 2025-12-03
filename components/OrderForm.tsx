@@ -106,14 +106,18 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
 
   // Click Outside
   useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
+    function handleClickOutside(event: MouseEvent | TouchEvent) {
       if (customerRef.current && !customerRef.current.contains(event.target as Node)) setShowCustomerSuggestions(false);
       if (eqNumRef.current && !eqNumRef.current.contains(event.target as Node)) setShowEqNumSuggestions(false);
       if (eqNameRef.current && !eqNameRef.current.contains(event.target as Node)) setShowEqNameSuggestions(false);
       if (productRef.current && !productRef.current.contains(event.target as Node)) setShowProductSuggestions(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside); // For mobile support
+    return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+        document.removeEventListener("touchstart", handleClickOutside);
+    };
   }, []);
 
   // --- Optimization: Pre-index unique equipment history ---
@@ -217,9 +221,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   // 3. Product Search (Inventory)
   const productSuggestions = useMemo(() => {
     if (!productNameQuery) return [];
-    const lowerQ = productNameQuery.toLowerCase();
+    const lowerQ = String(productNameQuery).toLowerCase();
+    // Safety check for p.name to prevent crash on bad data
     return inventory
-        .filter(p => p.name.toLowerCase().includes(lowerQ))
+        .filter(p => p && p.name && String(p.name).toLowerCase().includes(lowerQ))
         .slice(0, 8);
   }, [productNameQuery, inventory]);
 
@@ -240,7 +245,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
     setShowCustomerSuggestions(false);
   };
 
-  const customerSuggestions = customers.filter(c => c.name.toLowerCase().includes(customerQuery.toLowerCase()));
+  // Safety check for customer search
+  const customerSuggestions = customers.filter(c => 
+      c && c.name && String(c.name).toLowerCase().includes(String(customerQuery).toLowerCase())
+  );
 
   const toggleTechnician = (techName: string) => {
       setSelectedTechnicians(prev => 

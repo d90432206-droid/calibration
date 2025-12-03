@@ -59,46 +59,42 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [prefillMessage, setPrefillMessage] = useState<string | null>(null);
-
-  // Validation State
+  const [feedback, setFeedback] = useState<string | null>(null);
   const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
 
-  // Refs
-  const customerWrapperRef = useRef<HTMLDivElement>(null);
-  const eqNumWrapperRef = useRef<HTMLDivElement>(null);
-  const eqNameWrapperRef = useRef<HTMLDivElement>(null);
-  const productWrapperRef = useRef<HTMLDivElement>(null);
+  // Refs for click outside handling
+  const customerRef = useRef<HTMLDivElement>(null);
+  const eqNumRef = useRef<HTMLDivElement>(null);
+  const eqNameRef = useRef<HTMLDivElement>(null);
+  const productRef = useRef<HTMLDivElement>(null);
 
+  // Load Data
   useEffect(() => {
     mockGasService.getInventory().then(setInventory);
     mockGasService.getCustomers().then(setCustomers);
     mockGasService.getOrders().then(setHistoricalOrders);
     mockGasService.getTechnicians().then(setAvailableTechnicians);
     
-    const nextWeek = new Date();
-    nextWeek.setDate(nextWeek.getDate() + 7);
-    setTargetDate(nextWeek.toISOString().split('T')[0]);
-    
-    // Default order number is EMPTY to force manual entry
-    // setOrderNumber(''); 
+    // Set default target date to 7 days from now
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    setTargetDate(d.toISOString().split('T')[0]);
 
     if (copyData) {
-        // Copy Header Info
         setCustomerQuery(String(copyData.customerName || ''));
         setEqNumberQuery(String(copyData.equipmentNumber || ''));
         setEqNameQuery(String(copyData.equipmentName || ''));
         setSelectedTechnicians(copyData.technicians || []);
         setDiscountRate(copyData.discountRate || 100);
         
-        // Copy Single Item (Usually copy creates a new order with same equipment/item)
+        // Copy detail item if exists
         if (copyData.productName) {
             setCart([{
                 tempId: Date.now().toString(),
-                productId: copyData.productId || '',
+                productId: String(copyData.productId || ''),
                 productName: copyData.productName,
-                productSpec: copyData.productSpec || '',
-                category: copyData.category || '',
+                productSpec: String(copyData.productSpec || ''),
+                category: String(copyData.category || ''),
                 calibrationType: copyData.calibrationType || CalibrationType.INTERNAL,
                 price: copyData.unitPrice || 0,
                 quantity: copyData.quantity || 1,
@@ -111,183 +107,90 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   // Click Outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (customerWrapperRef.current && !customerWrapperRef.current.contains(event.target as Node)) {
-        setShowCustomerSuggestions(false);
-      }
-      if (eqNumWrapperRef.current && !eqNumWrapperRef.current.contains(event.target as Node)) {
-        setShowEqNumSuggestions(false);
-      }
-      if (eqNameWrapperRef.current && !eqNameWrapperRef.current.contains(event.target as Node)) {
-        setShowEqNameSuggestions(false);
-      }
-      if (productWrapperRef.current && !productWrapperRef.current.contains(event.target as Node)) {
-        setShowProductSuggestions(false);
-      }
+      if (customerRef.current && !customerRef.current.contains(event.target as Node)) setShowCustomerSuggestions(false);
+      if (eqNumRef.current && !eqNumRef.current.contains(event.target as Node)) setShowEqNumSuggestions(false);
+      if (eqNameRef.current && !eqNameRef.current.contains(event.target as Node)) setShowEqNameSuggestions(false);
+      if (productRef.current && !productRef.current.contains(event.target as Node)) setShowProductSuggestions(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // --- Optimization: Pre-calculate Unique Equipment List ---
-  // Fix: Safe string conversion to prevent crashes if DB returns numbers
+  // --- Optimization: Pre-index unique equipment history ---
+  // Create unique list of historical equipment to speed up search (avoiding map/filter on every render)
   const uniqueEquipmentHistory = useMemo(() => {
-      const map = new Map<string, Order>();
-      
+      const map = new Map();
       historicalOrders.forEach(order => {
-          if (!order.equipmentNumber) return;
+          // Add String() coercion to prevent crashes if data is malformed (e.g. number instead of string)
+          const eqNum = String(order.equipmentNumber || '').trim();
+          const eqName = String(order.equipmentName || '').trim();
           
-          // CRITICAL FIX: Cast to String() before trimming
-          const key = String(order.equipmentNumber).trim();
-          
-          if (!map.has(key)) {
-              map.set(key, order);
+          if (eqNum) {
+              const key = eqNum;
+              if (!map.has(key)) {
+                  map.set(key, { ...order, type: 'eqNum' });
+              }
+          }
+          if (eqName) {
+              const key = `NAME:${eqName}`; // Prefix to avoid collision
+              if (!map.has(key)) {
+                  map.set(key, { ...order, type: 'eqName' });
+              }
           }
       });
-      
       return Array.from(map.values());
   }, [historicalOrders]);
 
-  // Helper: Get item count for a specific job (Order + Eq match)
-  const getJobItemCount = (order: Order) => {
+  // --- Search Logic ---
+  
+  // 1. Equipment Number Search (History Index)
+  const getEqNumSuggestions = (query: string) => {
+      if (!query) return [];
+      const lowerQ = String(query).toLowerCase();
+      // Filter from pre-calculated unique list
+      return uniqueEquipmentHistory
+        .filter(item => item.type === 'eqNum' && String(item.equipmentNumber).toLowerCase().includes(lowerQ))
+        .slice(0, 8); // Limit results
+  };
+
+  // Helper to count historical items for a given equipment number
+  const getHistoryCount = (order: Order) => {
+      // This might still need full scan, but it only runs for the few suggestions displayed
       return historicalOrders.filter(o => 
           String(o.orderNumber) === String(order.orderNumber) && 
           String(o.equipmentNumber) === String(order.equipmentNumber)
       ).length;
   };
 
-  // --- Logic: Search Equipment Numbers (Using Optimized Index) ---
-  const eqNumSuggestions = useMemo(() => {
-      if (!eqNumberQuery) return [];
-      const q = String(eqNumberQuery).toLowerCase().trim();
+  const eqNumSuggestions = useMemo(() => getEqNumSuggestions(eqNumberQuery), [eqNumberQuery, uniqueEquipmentHistory]);
+
+  const selectEqNum = (order: Order) => {
+      setEqNumberQuery(order.equipmentNumber);
+      setEqNameQuery(order.equipmentName || '');
+      if (order.customerName) setCustomerQuery(order.customerName);
       
-      return uniqueEquipmentHistory
-          .filter(o => String(o.equipmentNumber || '').toLowerCase().includes(q))
-          .slice(0, 8); // Limit results for performance
-  }, [eqNumberQuery, uniqueEquipmentHistory]);
-
-  // --- Logic: Search Equipment Names (Using Optimized Index) ---
-  const eqNameSuggestions = useMemo(() => {
-      if (!eqNameQuery) return [];
-      const q = String(eqNameQuery).toLowerCase().trim();
-
-      // We filter the unique list by Name this time
-      return uniqueEquipmentHistory
-          .filter(o => String(o.equipmentName || '').toLowerCase().includes(q))
-          .slice(0, 8);
-  }, [eqNameQuery, uniqueEquipmentHistory]);
-
-
-  const handleHistoricalSelect = (order: Order) => {
-      // 1. Fill Header
-      setEqNumberQuery(String(order.equipmentNumber));
-      setEqNameQuery(String(order.equipmentName || '')); 
-      if (order.customerName) setCustomerQuery(String(order.customerName));
+      // Auto-load historical calibration items for this equipment
+      const relatedItems = historicalOrders
+        .filter(o => o.orderNumber === order.orderNumber && o.equipmentNumber === order.equipmentNumber)
+        .map(o => ({
+            tempId: Date.now().toString() + Math.random().toString().substr(2, 5),
+            productId: o.productId,
+            productName: o.productName,
+            productSpec: o.productSpec,
+            category: o.category,
+            calibrationType: o.calibrationType,
+            price: o.unitPrice,
+            quantity: o.quantity,
+            saveToInventory: false
+        }));
       
-      // 2. Find ALL items belonging to this Equipment in that Past Order
-      const relatedItems = historicalOrders.filter(o => 
-          String(o.orderNumber) === String(order.orderNumber) && 
-          String(o.equipmentNumber) === String(order.equipmentNumber)
-      );
+      setCart(prev => [...prev, ...relatedItems]);
+      setFeedback(`已自動帶入 "${order.equipmentNumber}" 的 ${relatedItems.length} 筆歷史校正明細`);
 
-      // 3. Convert to Cart Items
-      const newCartItems: CartItem[] = relatedItems.map(o => ({
-          tempId: Date.now().toString() + Math.random().toString().substr(2, 5),
-          productId: o.productId,
-          productName: o.productName,
-          productSpec: o.productSpec,
-          category: o.category,
-          calibrationType: o.calibrationType,
-          price: o.unitPrice,
-          quantity: o.quantity,
-          saveToInventory: false
-      }));
-
-      // 4. Add to Cart
-      setCart(prev => [...prev, ...newCartItems]);
-      
-      setPrefillMessage(`已自動帶入 "${order.equipmentNumber}" 的 ${newCartItems.length} 筆歷史校正明細`);
-
-      // Close suggestions
       setShowEqNumSuggestions(false);
       setShowEqNameSuggestions(false);
-      
-      // Clear single item input (since we added to cart directly)
       setProductNameQuery('');
       setCurrentItem({
-          price: 0,
-          quantity: 1,
-          category: '',
-          productSpec: '',
-          calibrationType: CalibrationType.INTERNAL,
-          saveToInventory: false,
-          productId: ''
-      });
-
-      // Clear message after 3s
-      setTimeout(() => setPrefillMessage(null), 3000);
-  };
-
-
-  // --- Logic: Search Inventory Product (The Service Item) ---
-  const productSuggestions = React.useMemo(() => {
-      if (!productNameQuery) return [];
-      const q = String(productNameQuery).toLowerCase();
-      // Safe string check
-      return inventory.filter(p => String(p.name || '').toLowerCase().includes(q)).slice(0, 8);
-  }, [productNameQuery, inventory]);
-
-  const handleProductSelect = (product: Product) => {
-      setProductNameQuery(product.name);
-      setCurrentItem(prev => ({
-          ...prev,
-          productSpec: product.specification,
-          category: product.category,
-          price: product.standardPrice,
-          productId: product.id
-      }));
-      setShowProductSuggestions(false);
-  };
-
-  const handleCustomerSelect = (customer: Customer) => {
-    setCustomerQuery(customer.name);
-    setShowCustomerSuggestions(false);
-  };
-
-  const filteredCustomers = useMemo(() => {
-      if (!customerQuery) return [];
-      const q = String(customerQuery).toLowerCase();
-      return customers.filter(c => String(c.name || '').toLowerCase().includes(q)).slice(0, 8);
-  }, [customers, customerQuery]);
-
-  const handleTechnicianToggle = (tech: string) => {
-      setSelectedTechnicians(prev => 
-        prev.includes(tech) ? prev.filter(t => t !== tech) : [...prev, tech]
-      );
-  };
-
-  const addToCart = () => {
-    if (!productNameQuery || currentItem.price === undefined) {
-        alert("請選擇校正品項並確認價格");
-        return;
-    }
-
-    const newItem: CartItem = {
-        tempId: Date.now().toString(),
-        productId: currentItem.productId || '',
-        productName: productNameQuery,
-        productSpec: currentItem.productSpec || '',
-        category: currentItem.category || '一般',
-        calibrationType: currentItem.calibrationType || CalibrationType.INTERNAL,
-        price: currentItem.price || 0,
-        quantity: currentItem.quantity || 1,
-        saveToInventory: currentItem.saveToInventory || false
-    };
-
-    setCart([...cart, newItem]);
-    
-    // Reset inputs for next item
-    setProductNameQuery('');
-    setCurrentItem({
         price: 0,
         quantity: 1,
         category: '',
@@ -295,6 +198,88 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
         calibrationType: CalibrationType.INTERNAL,
         saveToInventory: false,
         productId: ''
+      });
+
+      setTimeout(() => setFeedback(null), 3000);
+  };
+
+  // 2. Equipment Name Search (History Index)
+  const getEqNameSuggestions = (query: string) => {
+      if (!query) return [];
+      const lowerQ = String(query).toLowerCase();
+      return uniqueEquipmentHistory
+        .filter(item => item.type === 'eqName' && String(item.equipmentName).toLowerCase().includes(lowerQ))
+        .slice(0, 8);
+  };
+  
+  const eqNameSuggestions = useMemo(() => getEqNameSuggestions(eqNameQuery), [eqNameQuery, uniqueEquipmentHistory]);
+
+  // 3. Product Search (Inventory)
+  const productSuggestions = useMemo(() => {
+    if (!productNameQuery) return [];
+    const lowerQ = productNameQuery.toLowerCase();
+    return inventory
+        .filter(p => p.name.toLowerCase().includes(lowerQ))
+        .slice(0, 8);
+  }, [productNameQuery, inventory]);
+
+  const selectProduct = (product: Product) => {
+    setProductNameQuery(product.name);
+    setCurrentItem(prev => ({
+        ...prev,
+        productSpec: product.specification,
+        category: product.category,
+        price: product.standardPrice,
+        productId: product.id
+    }));
+    setShowProductSuggestions(false);
+  };
+
+  const selectCustomer = (customer: Customer) => {
+    setCustomerQuery(customer.name);
+    setShowCustomerSuggestions(false);
+  };
+
+  const customerSuggestions = customers.filter(c => c.name.toLowerCase().includes(customerQuery.toLowerCase()));
+
+  const toggleTechnician = (techName: string) => {
+      setSelectedTechnicians(prev => 
+        prev.includes(techName) 
+            ? prev.filter(t => t !== techName)
+            : [...prev, techName]
+      );
+  };
+
+  const addToCart = () => {
+    if (!productNameQuery || currentItem.price === undefined) {
+      alert('請選擇校正品項並確認價格');
+      return;
+    }
+
+    const newItem: CartItem = {
+      tempId: Date.now().toString(),
+      productId: currentItem.productId || '',
+      productName: productNameQuery,
+      productSpec: currentItem.productSpec || '',
+      category: currentItem.category || '一般',
+      calibrationType: currentItem.calibrationType || CalibrationType.INTERNAL,
+      price: currentItem.price || 0,
+      quantity: currentItem.quantity || 1,
+      saveToInventory: currentItem.saveToInventory || false
+    };
+
+    setCart([...cart, newItem]);
+    
+    // Reset item form
+    setProductNameQuery('');
+    setCurrentItem({
+      price: 0,
+      quantity: 1,
+      category: '',
+      productSpec: '',
+      calibrationType: CalibrationType.INTERNAL,
+      saveToInventory: false,
+      productId: ''
     });
   };
 
@@ -303,11 +288,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   };
 
   const handleSubmit = async () => {
-    // 1. Trigger visual validation errors first
     setHasAttemptedSubmit(true);
-
-    // 2. Collect missing fields
-    const missingFields: string[] = [];
+    
+    // Validation
+    const missingFields = [];
     if (!orderNumber.trim()) missingFields.push('校正訂單編號');
     if (!customerQuery.trim()) missingFields.push('客戶名稱');
     if (!targetDate) missingFields.push('預計完成日');
@@ -316,53 +300,54 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
     if (cart.length === 0) missingFields.push('校正明細 (至少加入一項)');
 
     if (missingFields.length > 0) {
-        // Ensure alert works by using a timeout to allow React to render the red borders first (optional but good practice)
         setTimeout(() => {
             alert(`無法建立工單，請補齊以下資訊：\n\n- ${missingFields.join('\n- ')}`);
-        }, 50);
+        }, 50); // Small delay to let UI render red borders first
         return;
     }
 
     setLoading(true);
-
     try {
-      // 3. Validation - Duplicate Order Number
       const exists = await mockGasService.checkOrderExists(orderNumber);
       if (exists) {
-        alert(`訂單編號 ${orderNumber} 已存在，請使用不同的編號。`);
-        setLoading(false);
-        return;
+          alert(`訂單編號 ${orderNumber} 已存在，請使用不同的編號。`);
+          setLoading(false);
+          return;
       }
 
-      const existingCustomer = customers.find(c => c.name === customerQuery);
-      if (!existingCustomer) {
+      // Add customer if new
+      if (!customers.find(c => c.name === customerQuery)) {
         await mockGasService.addCustomer(customerQuery);
       }
 
-      const orderPayloads = [];
+      const ordersToCreate: any[] = [];
 
       for (const item of cart) {
         let finalProductId = item.productId;
-
+        
+        // Auto add to inventory if requested
         if (!finalProductId && item.saveToInventory) {
-          const newProduct = await mockGasService.addProduct({
-            name: item.productName,
-            specification: item.productSpec,
-            category: item.category,
-            standardPrice: item.price,
-            lastUpdated: new Date().toISOString()
-          });
-          finalProductId = newProduct.id;
+            const newProd = await mockGasService.addProduct({
+                name: item.productName,
+                specification: item.productSpec,
+                category: item.category,
+                standardPrice: item.price,
+                lastUpdated: new Date().toISOString()
+            });
+            finalProductId = newProd.id;
         } else if (!finalProductId) {
+            // Unregistered item (adhoc)
             finalProductId = 'TEMP-' + Math.random().toString(36).substr(2, 5);
         }
 
-        orderPayloads.push({
+        ordersToCreate.push({
+            // Header Info (Shared)
             orderNumber: orderNumber,
             customerName: customerQuery,
-            equipmentNumber: eqNumberQuery, // Header info for all items
-            equipmentName: eqNameQuery,     // Header info for all items
+            equipmentNumber: eqNumberQuery,
+            equipmentName: eqNameQuery,
             
+            // Detail Info
             productId: finalProductId,
             productName: item.productName,
             productSpec: item.productSpec,
@@ -372,32 +357,38 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
             unitPrice: item.price,
             discountRate: discountRate,
             
+            // Status & Dates
             status: CalibrationStatus.PENDING,
             targetDate: new Date(targetDate).toISOString(),
-            technicians: selectedTechnicians,
+            technicians: selectedTechnicians
         });
       }
 
-      await mockGasService.createOrders(orderPayloads, orderNumber);
+      // Create orders (service now handles optimistic update)
+      await mockGasService.createOrders(ordersToCreate, orderNumber);
+      
+      // Parallel background refresh to keep cache fresh for next time
+      Promise.all([
+          mockGasService.getInventory(),
+          mockGasService.getCustomers()
+      ]).catch(console.error);
 
-      mockGasService.getInventory().then(setInventory);
-      mockGasService.getCustomers().then(setCustomers);
-      onOrderCreated();
+      onOrderCreated(); // Trigger view switch
     } catch (error) {
-      console.error("Error creating orders", error);
-      alert("建立訂單失敗");
+      console.error('Error creating orders', error);
+      alert('建立訂單失敗');
     } finally {
       setLoading(false);
     }
   };
 
+  // Calculations
   const subTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const finalTotal = Math.round(subTotal * (discountRate / 100));
 
-  // Helper for input styles based on validation
-  const getInputClass = (value: string | number) => {
+  const getInputClass = (val: string | number) => {
       const base = "w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-brand-500 outline-none transition-colors";
-      if (hasAttemptedSubmit && !value) {
+      if (hasAttemptedSubmit && !val) {
           return `${base} border-red-500 bg-red-50 ring-1 ring-red-500`;
       }
       return `${base} border-slate-300`;
@@ -406,169 +397,163 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       
-      {/* Header Info Card */}
+      {/* 1. Order Header Card */}
       <div className="bg-white rounded-lg shadow-sm border-t-4 border-brand-600 border border-slate-200 p-6">
         <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-            <Archive className="text-brand-600" />
-            {copyData ? '複製並建立新校正工單' : '建立校正工單'}
+          <Archive className="text-brand-600" /> 
+          {copyData ? '複製並建立新校正工單' : '建立校正工單'}
         </h2>
         
-        {/* Row 1: Order Basics */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center gap-1">
-                <FileText size={14}/> 校正訂單編號 (Order ID) <span className="text-red-500">*</span>
-              </label>
-              <input 
-                type="text" 
-                value={orderNumber}
-                onChange={e => setOrderNumber(e.target.value)}
-                className={`${getInputClass(orderNumber)} bg-slate-50 font-mono text-brand-800 font-bold`}
-                placeholder="例如: CAL-2024-001"
-              />
-            </div>
-             <div className="relative" ref={customerWrapperRef}>
-              <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center gap-1">
-                <Building2 size={14}/> 客戶名稱 (Client) <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <input 
-                    type="text" 
-                    value={customerQuery}
-                    onChange={e => {
-                        setCustomerQuery(e.target.value);
-                        setShowCustomerSuggestions(true);
-                    }}
-                    onFocus={() => setShowCustomerSuggestions(true)}
-                    className={`${getInputClass(customerQuery)} pl-9`}
-                    placeholder="搜尋或輸入新客戶..."
+          {/* Order Number (Manual) */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center gap-1">
+               <FileText size={14} /> 校正訂單編號 (Order ID) <span className="text-red-500">*</span>
+            </label>
+            <input 
+              type="text" 
+              value={orderNumber}
+              onChange={(e) => setOrderNumber(e.target.value)}
+              className={`${getInputClass(orderNumber)} bg-slate-50 font-mono text-brand-800 font-bold`}
+              placeholder="例如: CAL-2024-001"
+            />
+          </div>
+
+          {/* Customer (Autocomplete) */}
+          <div className="relative" ref={customerRef}>
+            <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center gap-1">
+               <Building2 size={14} /> 客戶名稱 (Client) <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+                <input
+                type="text"
+                value={customerQuery}
+                onChange={(e) => { setCustomerQuery(e.target.value); setShowCustomerSuggestions(true); }}
+                onFocus={() => setShowCustomerSuggestions(true)}
+                className={`${getInputClass(customerQuery)} pl-9`}
+                placeholder="搜尋或輸入新客戶..."
                 />
                 <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
+            </div>
+            {showCustomerSuggestions && customerQuery && (
+              <div className="absolute z-20 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                {customerSuggestions.map(c => (
+                  <div key={c.id} onClick={() => selectCustomer(c)} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm">
+                    {c.name}
+                  </div>
+                ))}
+                {customerSuggestions.length === 0 && (
+                    <div className="px-4 py-2 text-slate-400 text-sm italic">將新增 "{customerQuery}"</div>
+                )}
               </div>
-              {showCustomerSuggestions && customerQuery && (
-                <div className="absolute z-20 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                    {filteredCustomers.map(c => (
-                        <div key={c.id} onClick={() => handleCustomerSelect(c)} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-sm">
-                            {c.name}
-                        </div>
-                    ))}
-                    {filteredCustomers.length === 0 && (
-                         <div className="px-4 py-2 text-slate-400 text-sm italic">將新增 "{customerQuery}"</div>
-                    )}
-                </div>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1">預計完成日 <span className="text-red-500">*</span></label>
-              <input 
-                type="date" 
-                value={targetDate}
-                onChange={e => setTargetDate(e.target.value)}
-                className={getInputClass(targetDate)}
-              />
-            </div>
+            )}
+          </div>
+
+          {/* Target Date */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-1">
+              預計完成日 <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="date"
+              value={targetDate}
+              onChange={(e) => setTargetDate(e.target.value)}
+              className={getInputClass(targetDate)}
+            />
+          </div>
         </div>
 
         <div className="border-t border-slate-100 my-4"></div>
 
-        {/* Row 2: Equipment Info (The object being calibrated) */}
+        {/* Equipment Info Section */}
         <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6 relative">
             <div className="absolute -top-3 left-4 bg-white px-2 text-xs font-bold text-brand-600 border border-brand-100 rounded">
                 被校正設備資訊 (Equipment Info)
             </div>
             
-            <div ref={eqNumWrapperRef} className="relative">
+            {/* Equipment Number */}
+            <div ref={eqNumRef} className="relative">
                 <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center gap-1">
-                   <History size={14} className="text-slate-400"/> 設備案號 (Equipment No.) <span className="text-red-500">*</span>
+                    <History size={14} className="text-slate-400" /> 設備案號 (Equipment No.) <span className="text-red-500">*</span>
                 </label>
                 <input 
-                    type="text" 
+                    type="text"
                     value={eqNumberQuery}
-                    onChange={e => {
-                        setEqNumberQuery(e.target.value);
-                        setShowEqNumSuggestions(true);
-                    }}
+                    onChange={(e) => { setEqNumberQuery(e.target.value); setShowEqNumSuggestions(true); }}
                     onFocus={() => setShowEqNumSuggestions(true)}
                     className={`${getInputClass(eqNumberQuery)} font-mono`}
                     placeholder="輸入案號索引歷史資料..."
                 />
                 {showEqNumSuggestions && eqNumSuggestions.length > 0 && (
                     <div className="absolute z-20 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-80 overflow-y-auto">
-                        <div className="px-3 py-1 bg-slate-50 text-[10px] text-slate-400 font-bold uppercase sticky top-0 border-b">歷史案號索引</div>
-                        {eqNumSuggestions.map((item: Order) => {
-                            const itemCount = getJobItemCount(item);
+                        <div className="px-3 py-1 bg-slate-50 text-[10px] text-slate-400 font-bold uppercase sticky top-0 border-b">
+                            歷史案號索引
+                        </div>
+                        {eqNumSuggestions.map(order => {
+                            const count = getHistoryCount(order);
                             return (
-                                <div 
-                                key={item.id} 
-                                onClick={() => handleHistoricalSelect(item)}
-                                className="px-4 py-3 hover:bg-brand-50 cursor-pointer border-b border-slate-50 last:border-none group"
-                                >
-                                    <div className="flex justify-between items-start">
-                                        <span className="font-mono font-bold text-slate-700 text-sm">{String(item.equipmentNumber)}</span>
-                                        <span className="text-xs text-slate-400">{new Date(item.createDate).toLocaleDateString()}</span>
-                                    </div>
-                                    <div className="text-sm font-medium text-slate-800 my-0.5">{item.equipmentName}</div>
-                                    <div className="flex items-center gap-1 mt-1 bg-slate-100 p-1.5 rounded-md group-hover:bg-brand-100/50">
-                                        <Package size={10} className="text-slate-500" />
-                                        <span className="text-xs text-slate-600 font-medium">
-                                            包含: {item.productName} 
-                                            {itemCount > 1 ? <span className="text-brand-600 ml-1 font-bold">等 {itemCount} 項明細</span> : ` (${item.productSpec})`}
-                                        </span>
-                                    </div>
+                            <div key={order.id} onClick={() => selectEqNum(order)} className="px-4 py-3 hover:bg-brand-50 cursor-pointer border-b border-slate-50 last:border-none group">
+                                <div className="flex justify-between items-start">
+                                    <span className="font-mono font-bold text-slate-700 text-sm">{order.equipmentNumber}</span>
+                                    <span className="text-xs text-slate-400">{new Date(order.createDate).toLocaleDateString()}</span>
                                 </div>
-                            );
-                        })}
+                                <div className="text-sm font-medium text-slate-800 my-0.5">{order.equipmentName}</div>
+                                <div className="flex items-center gap-1 mt-1 bg-slate-100 p-1.5 rounded-md group-hover:bg-brand-100/50">
+                                    <Package size={10} className="text-slate-500" />
+                                    <span className="text-xs text-slate-600 font-medium">
+                                        包含: {order.productName} 
+                                        {count > 1 ? <span className="text-brand-600 ml-1 font-bold">等 {count} 項明細</span> : ` (${order.productSpec})`}
+                                    </span>
+                                </div>
+                            </div>
+                        )})}
                     </div>
                 )}
             </div>
 
-            <div ref={eqNameWrapperRef} className="relative">
+            {/* Equipment Name */}
+            <div ref={eqNameRef} className="relative">
                 <label className="block text-sm font-semibold text-slate-700 mb-1 flex items-center gap-1">
-                   <Monitor size={14} className="text-slate-400"/> 設備名稱 (Equipment Name) <span className="text-red-500">*</span>
+                    <Monitor size={14} className="text-slate-400" /> 設備名稱 (Equipment Name) <span className="text-red-500">*</span>
                 </label>
                 <input 
-                    type="text" 
+                    type="text"
                     value={eqNameQuery}
-                    onChange={e => {
-                        setEqNameQuery(e.target.value);
-                        setShowEqNameSuggestions(true);
-                    }}
+                    onChange={(e) => { setEqNameQuery(e.target.value); setShowEqNameSuggestions(true); }}
                     onFocus={() => setShowEqNameSuggestions(true)}
                     className={getInputClass(eqNameQuery)}
                     placeholder="例如: 品管室數位卡尺"
                 />
                 {showEqNameSuggestions && eqNameSuggestions.length > 0 && (
-                     <div className="absolute z-20 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-80 overflow-y-auto">
-                        <div className="px-3 py-1 bg-slate-50 text-[10px] text-slate-400 font-bold uppercase sticky top-0 border-b">歷史名稱參考</div>
-                         {eqNameSuggestions.map((item: Order) => {
-                             const itemCount = getJobItemCount(item);
-                             return (
-                                <div 
-                                    key={item.id} 
-                                    onClick={() => handleHistoricalSelect(item)}
-                                    className="px-4 py-3 hover:bg-brand-50 cursor-pointer border-b border-slate-50 last:border-none group"
-                                >
-                                    <div className="flex justify-between items-center mb-1">
-                                        <span className="text-sm font-bold text-slate-800">{item.equipmentName}</span>
-                                        <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-500">{String(item.equipmentNumber)}</span>
-                                    </div>
-                                    <div className="text-xs text-slate-500">客戶: {item.customerName}</div>
-                                    <div className="mt-1 text-xs text-slate-400 group-hover:text-brand-700 flex items-center gap-1">
-                                        <ArrowDownCircle size={10} />
-                                        帶入: {item.productName}
-                                        {itemCount > 1 && <span className="font-bold ml-1">...等 {itemCount} 項</span>}
-                                    </div>
+                    <div className="absolute z-20 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-80 overflow-y-auto">
+                        <div className="px-3 py-1 bg-slate-50 text-[10px] text-slate-400 font-bold uppercase sticky top-0 border-b">
+                            歷史名稱參考
+                        </div>
+                        {eqNameSuggestions.map(order => {
+                            const count = getHistoryCount(order);
+                            return (
+                            <div key={order.id} onClick={() => selectEqNum(order)} className="px-4 py-3 hover:bg-brand-50 cursor-pointer border-b border-slate-50 last:border-none group">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-sm font-bold text-slate-800">{order.equipmentName}</span>
+                                    <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-500">{order.equipmentNumber}</span>
                                 </div>
-                             );
-                         })}
-                     </div>
+                                <div className="text-xs text-slate-500">客戶: {order.customerName}</div>
+                                <div className="mt-1 text-xs text-slate-400 group-hover:text-brand-700 flex items-center gap-1">
+                                    <ArrowDownCircle size={10} />
+                                    帶入: {order.productName} 
+                                    {count > 1 && <span className="font-bold ml-1">...等 {count} 項</span>}
+                                </div>
+                            </div>
+                        )})}
+                    </div>
                 )}
             </div>
         </div>
 
+        {/* Technician Selection */}
         <div className="mt-4">
             <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-1">
-            <User size={14}/> 負責校正人員 (可複選)
+                <User size={14} /> 負責校正人員 (可複選)
             </label>
             <div className="flex flex-wrap gap-2">
                 {availableTechnicians.length === 0 ? (
@@ -576,13 +561,13 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
                 ) : (
                     availableTechnicians.map(tech => (
                         <button
-                        key={tech.id}
-                        onClick={() => handleTechnicianToggle(tech.name)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                            selectedTechnicians.includes(tech.name)
-                            ? 'bg-brand-600 text-white border-brand-600'
-                            : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                        }`}
+                            key={tech.id}
+                            onClick={() => toggleTechnician(tech.name)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                                selectedTechnicians.includes(tech.name)
+                                ? 'bg-brand-600 text-white border-brand-600'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                            }`}
                         >
                             {tech.name}
                         </button>
@@ -592,257 +577,249 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
         </div>
       </div>
 
+      {/* 2. Order Details (Inventory Search) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Item Input Area (Product/Service from Inventory) */}
+        
+        {/* Left Column: Add Item */}
         <div className="lg:col-span-1 space-y-6">
-            <div className={`bg-white rounded-lg shadow-sm border border-slate-200 p-6 relative transition-all duration-300 ${prefillMessage ? 'ring-2 ring-amber-400' : ''}`}>
-                
-                {prefillMessage && (
-                    <div className="absolute top-0 left-0 right-0 bg-amber-100 text-amber-800 text-xs px-4 py-1.5 font-bold flex items-center justify-center animate-pulse rounded-t-lg">
-                        <History size={12} className="mr-1.5" />
-                        {prefillMessage}
-                    </div>
-                )}
-
-                <h3 className="text-md font-bold text-slate-700 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2 mt-2">
-                    <Plus size={18} className="text-brand-500"/>
-                    新增校正明細 (Inventory)
-                </h3>
-                
-                <div className="space-y-4">
-                    {/* Product Name Search/Input */}
-                    <div ref={productWrapperRef} className="relative">
-                        <label className="block text-xs font-semibold text-slate-500 mb-1">校正品項名稱 (Service Item)</label>
-                        <div className="relative">
-                             <input 
-                                type="text" 
-                                value={productNameQuery}
-                                onChange={e => {
-                                    setProductNameQuery(e.target.value);
-                                    setShowProductSuggestions(true);
-                                }}
-                                onFocus={() => setShowProductSuggestions(true)}
-                                className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-brand-500 outline-none text-sm font-bold text-slate-700"
-                                placeholder="搜尋庫存服務項目..."
-                            />
-                            <Package className="absolute left-3 top-2.5 text-slate-400" size={16} />
-                        </div>
-                        {showProductSuggestions && productSuggestions.length > 0 && (
-                            <div className="absolute z-10 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                                <div className="px-3 py-1 bg-emerald-50 text-[10px] text-emerald-600 font-bold uppercase">商品庫存</div>
-                                {productSuggestions.map((item: Product) => (
-                                    <div 
-                                        key={item.id}
-                                        onClick={() => handleProductSelect(item)}
-                                        className="px-4 py-2 hover:bg-emerald-50 cursor-pointer border-b border-slate-50 last:border-none group"
-                                    >
-                                        <div className="flex justify-between items-center">
-                                            <span className="font-medium text-slate-800 text-sm group-hover:text-brand-700">{item.name}</span>
-                                            <span className="text-[10px] text-slate-400">${item.standardPrice}</span>
-                                        </div>
-                                        <div className="text-xs text-slate-400 mt-0.5">{item.specification}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-semibold text-slate-500 mb-1">規格 (Specification)</label>
-                        <input 
-                            type="text" 
-                            value={currentItem.productSpec || ''}
-                            onChange={e => setCurrentItem({...currentItem, productSpec: e.target.value})}
-                            className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
-                            placeholder="例如: 0-150mm"
-                        />
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                         <div>
-                            <label className="block text-xs font-semibold text-slate-500 mb-1">校正方式</label>
-                            <select 
-                                value={currentItem.calibrationType}
-                                onChange={e => setCurrentItem({...currentItem, calibrationType: e.target.value as CalibrationType})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm bg-white"
-                            >
-                                <option value={CalibrationType.INTERNAL}>內校</option>
-                                <option value={CalibrationType.EXTERNAL}>委外</option>
-                            </select>
-                        </div>
-                         <div>
-                            <label className="block text-xs font-semibold text-slate-500 mb-1">分類</label>
-                            <input 
-                                type="text" 
-                                value={currentItem.category || ''}
-                                onChange={e => setCurrentItem({...currentItem, category: e.target.value})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-500 mb-1">單價</label>
-                            <input 
-                                type="number" 
-                                value={currentItem.price}
-                                onChange={e => setCurrentItem({...currentItem, price: Number(e.target.value)})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-semibold text-slate-500 mb-1">數量</label>
-                            <input 
-                                type="number" 
-                                min="1"
-                                value={currentItem.quantity}
-                                onChange={e => setCurrentItem({...currentItem, quantity: Number(e.target.value)})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
-                            />
-                        </div>
-                    </div>
-
-                    {!currentItem.productId && productNameQuery && (
-                        <div className="pt-2">
-                             <button
-                                type="button"
-                                onClick={() => setCurrentItem({...currentItem, saveToInventory: !currentItem.saveToInventory})}
-                                className={`w-full py-2 px-3 rounded-md text-xs font-bold transition-all flex items-center justify-center gap-2 border ${
-                                    currentItem.saveToInventory 
-                                    ? 'bg-amber-100 text-amber-700 border-amber-300 shadow-sm' 
-                                    : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
-                                }`}
-                             >
-                                {currentItem.saveToInventory ? (
-                                    <>
-                                        <CheckSquare size={16} /> ✓ 已啟用：自動加入此品項至庫存
-                                    </>
-                                ) : (
-                                    <>
-                                        <Square size={16} /> 此品項不在庫存中？點此新增
-                                    </>
-                                )}
-                             </button>
-                        </div>
-                    )}
-
-                    <button 
-                        onClick={addToCart}
-                        className="w-full mt-4 py-2 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
-                    >
-                        <Plus size={16} /> 加入清單
-                    </button>
+          <div className={`bg-white rounded-lg shadow-sm border border-slate-200 p-6 relative transition-all duration-300 ${feedback ? 'ring-2 ring-amber-400' : ''}`}>
+            
+            {feedback && (
+                <div className="absolute top-0 left-0 right-0 bg-amber-100 text-amber-800 text-xs px-4 py-1.5 font-bold flex items-center justify-center animate-pulse rounded-t-lg">
+                    <History size={12} className="mr-1.5" />
+                    {feedback}
                 </div>
+            )}
+
+            <h3 className="text-md font-bold text-slate-700 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2 mt-2">
+              <Plus size={18} className="text-brand-500" />
+              新增校正明細 (Inventory)
+            </h3>
+            
+            <div className="space-y-4">
+              {/* Product Search */}
+              <div ref={productRef} className="relative">
+                <label className="block text-xs font-semibold text-slate-500 mb-1">校正品項名稱 (Service Item)</label>
+                <div className="relative">
+                    <input
+                    type="text"
+                    value={productNameQuery}
+                    onChange={(e) => { setProductNameQuery(e.target.value); setShowProductSuggestions(true); }}
+                    onFocus={() => setShowProductSuggestions(true)}
+                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-brand-500 outline-none text-sm font-bold text-slate-700"
+                    placeholder="搜尋庫存服務項目..."
+                    />
+                    <Package className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                </div>
+                {showProductSuggestions && productSuggestions.length > 0 && (
+                  <div className="absolute z-10 w-full bg-white mt-1 border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                    <div className="px-3 py-1 bg-emerald-50 text-[10px] text-emerald-600 font-bold uppercase">商品庫存</div>
+                    {productSuggestions.map(p => (
+                      <div key={p.id} onClick={() => selectProduct(p)} className="px-4 py-2 hover:bg-emerald-50 cursor-pointer border-b border-slate-50 last:border-none group">
+                        <div className="flex justify-between items-center">
+                            <span className="font-medium text-slate-800 text-sm group-hover:text-brand-700">{p.name}</span>
+                            <span className="text-[10px] text-slate-400">${p.standardPrice}</span>
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">{p.specification}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Spec */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">規格 (Specification)</label>
+                <input
+                  type="text"
+                  value={currentItem.productSpec || ''}
+                  onChange={(e) => setCurrentItem({...currentItem, productSpec: e.target.value})}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
+                  placeholder="例如: 0-150mm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">校正方式</label>
+                    <select 
+                        value={currentItem.calibrationType}
+                        onChange={(e) => setCurrentItem({...currentItem, calibrationType: e.target.value as CalibrationType})}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm bg-white"
+                    >
+                        <option value={CalibrationType.INTERNAL}>內校</option>
+                        <option value={CalibrationType.EXTERNAL}>委外</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">分類</label>
+                    <input
+                        type="text"
+                        value={currentItem.category || ''}
+                        onChange={(e) => setCurrentItem({...currentItem, category: e.target.value})}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
+                    />
+                  </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">單價</label>
+                    <input
+                    type="number"
+                    value={currentItem.price}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setCurrentItem({...currentItem, price: Number(e.target.value)})}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">數量</label>
+                    <input
+                    type="number"
+                    min="1"
+                    value={currentItem.quantity}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setCurrentItem({...currentItem, quantity: Number(e.target.value)})}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md outline-none text-sm"
+                    />
+                </div>
+              </div>
+
+              {!currentItem.productId && productNameQuery && (
+                  <div className="pt-2">
+                      <button 
+                        type="button"
+                        onClick={() => setCurrentItem({...currentItem, saveToInventory: !currentItem.saveToInventory})}
+                        className={`w-full py-2 px-3 rounded-md text-xs font-bold transition-all flex items-center justify-center gap-2 border ${
+                            currentItem.saveToInventory 
+                            ? 'bg-amber-100 text-amber-700 border-amber-300 shadow-sm' 
+                            : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                          {currentItem.saveToInventory ? (
+                              <><CheckSquare size={16} /> ✓ 已啟用：自動加入此品項至庫存</>
+                          ) : (
+                              <><Square size={16} /> 此品項不在庫存中？點此新增</>
+                          )}
+                      </button>
+                  </div>
+              )}
+
+              <button 
+                onClick={addToCart}
+                className="w-full mt-4 py-2 bg-slate-800 text-white rounded-md hover:bg-slate-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+              >
+                <Plus size={16} /> 加入清單
+              </button>
             </div>
+          </div>
         </div>
 
-        {/* Cart List */}
+        {/* Right Column: Cart List */}
         <div className="lg:col-span-2">
-            <div className={`bg-white rounded-lg shadow-sm border border-slate-200 min-h-[400px] flex flex-col ${hasAttemptedSubmit && cart.length === 0 ? 'border-red-500 ring-2 ring-red-100' : ''}`}>
-                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                        <ShoppingCart size={18} /> 訂單明細 ({cart.length}) <span className="text-red-500">*</span>
-                    </h3>
+          <div className={`bg-white rounded-lg shadow-sm border border-slate-200 min-h-[400px] flex flex-col ${hasAttemptedSubmit && cart.length === 0 ? 'border-red-500 ring-2 ring-red-100' : ''}`}>
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                <ShoppingCart size={18} /> 訂單明細 ({cart.length}) <span className="text-red-500">*</span>
+              </h3>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4">
+              {cart.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-300">
+                  <ShoppingCart size={48} className={`mb-2 ${hasAttemptedSubmit ? 'text-red-200' : ''}`} />
+                  <p className={hasAttemptedSubmit ? "text-red-500 font-bold" : ""}>
+                      {hasAttemptedSubmit ? '請至少加入一項校正明細' : '尚未加入任何品項'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {cart.map((item) => (
+                    <div key={item.tempId} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-800">{item.productName}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${item.calibrationType === CalibrationType.INTERNAL ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
+                                {CalibrationTypeLabel[item.calibrationType]}
+                            </span>
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 flex gap-4">
+                            <span>{item.category}</span>
+                            <span className="text-slate-400">規格: {item.productSpec}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-4 justify-end">
+                        <div className="text-right flex items-center gap-2">
+                            <div className="flex items-center bg-white border border-slate-200 rounded px-2 py-1">
+                                <span className="text-xs text-slate-400 mr-1">$</span>
+                                <input 
+                                    type="number" 
+                                    value={item.price}
+                                    onFocus={(e) => e.target.select()}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        setCart(cart.map(c => c.tempId === item.tempId ? {...c, price: isNaN(val) ? 0 : val} : c));
+                                    }}
+                                    className="w-16 text-right text-sm font-medium outline-none"
+                                />
+                            </div>
+                            <span className="text-slate-400 text-xs">x {item.quantity}</span>
+                        </div>
+                        <div className="text-sm font-bold text-slate-700 w-20 text-right">
+                          ${(item.price * item.quantity).toLocaleString()}
+                        </div>
+                        <button 
+                          onClick={() => removeFromCart(item.tempId)}
+                          className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 space-y-3">
+                <div className="flex justify-end items-center gap-3">
+                    <div className="flex items-center gap-2 text-sm text-slate-600">
+                        <Percent size={16} />
+                        折數 (%):
+                    </div>
+                    <input 
+                        type="number" 
+                        min="0" 
+                        max="100" 
+                        value={discountRate}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setDiscountRate(Math.min(100, Math.max(0, Number(e.target.value))))}
+                        className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-medium"
+                        placeholder="100"
+                    />
+                    <span className="text-xs text-slate-400">(80 = 8折)</span>
                 </div>
                 
-                <div className="flex-1 overflow-y-auto p-4">
-                    {cart.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                            <ShoppingCart size={48} className={`mb-2 ${hasAttemptedSubmit ? 'text-red-200' : ''}`} />
-                            <p className={hasAttemptedSubmit ? 'text-red-500 font-bold' : ''}>
-                                {hasAttemptedSubmit ? '請至少加入一項校正明細' : '尚未加入任何品項'}
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="space-y-3">
-                            {cart.map((item) => (
-                                <div key={item.tempId} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors gap-4">
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-bold text-slate-800">{item.productName}</span>
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${item.calibrationType === CalibrationType.INTERNAL ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
-                                                {CalibrationTypeLabel[item.calibrationType]}
-                                            </span>
-                                        </div>
-                                        <div className="text-xs text-slate-500 mt-1 flex gap-4">
-                                            <span>{item.category}</span>
-                                            <span className="text-slate-400">規格: {item.productSpec}</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-4 justify-end">
-                                        <div className="text-right flex items-center gap-2">
-                                            <div className="flex items-center bg-white border border-slate-200 rounded px-2 py-1">
-                                                <span className="text-xs text-slate-400 mr-1">$</span>
-                                                <input 
-                                                    type="number" 
-                                                    value={item.price}
-                                                    onChange={(e) => {
-                                                        const val = parseFloat(e.target.value);
-                                                        setCart(cart.map(i => i.tempId === item.tempId ? {...i, price: isNaN(val) ? 0 : val} : i));
-                                                    }}
-                                                    className="w-16 text-right text-sm font-medium outline-none"
-                                                />
-                                            </div>
-                                            <span className="text-slate-400 text-xs">x {item.quantity}</span>
-                                        </div>
-                                        <div className="text-sm font-bold text-slate-700 w-20 text-right">
-                                            ${(item.price * item.quantity).toLocaleString()}
-                                        </div>
-                                        <button 
-                                            onClick={() => removeFromCart(item.tempId)}
-                                            className="p-2 text-slate-400 hover:text-red-500 transition-colors"
-                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                <div className="flex justify-end items-end flex-col">
+                    <div className="text-sm text-slate-500">小計: ${subTotal.toLocaleString()}</div>
+                    <div className="text-2xl font-bold text-slate-800">總計: ${finalTotal.toLocaleString()}</div>
+                </div>
+
+                <button 
+                    onClick={handleSubmit}
+                    disabled={loading}
+                    className={`w-full py-3 rounded-lg text-white font-semibold flex justify-center items-center gap-2 transition-all ${loading ? 'bg-slate-300 cursor-not-allowed' : 'bg-brand-600 hover:bg-brand-700 shadow-lg shadow-brand-200'}`}
+                >
+                    {loading ? '處理中...' : (
+                        <>
+                            <Save size={18} /> {copyData ? '確認並建立新訂單' : '確認建立校正工單'}
+                        </>
                     )}
-                </div>
-
-                <div className="p-4 border-t border-slate-100 bg-slate-50 space-y-3">
-                    <div className="flex justify-end items-center gap-3">
-                         <div className="flex items-center gap-2 text-sm text-slate-600">
-                             <Percent size={16} />
-                             折數 (%):
-                         </div>
-                         <input 
-                            type="number" 
-                            min="0" max="100"
-                            value={discountRate}
-                            onChange={e => setDiscountRate(Math.min(100, Math.max(0, Number(e.target.value))))}
-                            className="w-20 px-2 py-1 border border-slate-300 rounded text-right font-medium"
-                            placeholder="100"
-                         />
-                         <span className="text-xs text-slate-400">(80 = 8折)</span>
-                    </div>
-                    
-                    <div className="flex justify-end items-end flex-col">
-                        <div className="text-sm text-slate-500">小計: ${subTotal.toLocaleString()}</div>
-                        <div className="text-2xl font-bold text-slate-800">
-                            總計: ${finalTotal.toLocaleString()}
-                        </div>
-                    </div>
-
-                    <button 
-                        onClick={handleSubmit}
-                        disabled={loading}
-                        className={`w-full py-3 rounded-lg text-white font-semibold flex justify-center items-center gap-2 transition-all ${
-                            loading 
-                            ? 'bg-slate-300 cursor-not-allowed' 
-                            : 'bg-brand-600 hover:bg-brand-700 shadow-lg shadow-brand-200'
-                        }`}
-                    >
-                        {loading ? '處理中...' : (
-                            <>
-                                <Save size={18} /> {copyData ? '確認並建立新訂單' : '確認建立校正工單'}
-                            </>
-                        )}
-                    </button>
-                </div>
+                </button>
             </div>
+          </div>
         </div>
       </div>
     </div>

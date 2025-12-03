@@ -1,19 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { viteSingleFile } from 'vite-plugin-singlefile';
 
 export default defineConfig({
-  plugins: [react(), viteSingleFile()],
+  plugins: [react()],
   build: {
-    target: 'esnext',
-    assetsInlineLimit: 100000000,
-    chunkSizeWarningLimit: 100000000,
-    cssCodeSplit: false,
-    reportCompressedSize: false,
+    outDir: 'dist',
+    sourcemap: false,
+    // Standard build options for Vercel
     rollupOptions: {
       output: {
-        inlineDynamicImports: true,
-        manualChunks: undefined,
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'recharts', 'lucide-react'],
+        },
       },
     },
   },

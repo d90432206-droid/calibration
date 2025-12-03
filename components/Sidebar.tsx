@@ -1,8 +1,7 @@
-
 import React, { useEffect, useState } from 'react';
 import { ViewState } from '../types';
-import { LayoutDashboard, PlusCircle, List, Settings, Database, LogOut, Wifi, WifiOff } from 'lucide-react';
-import { mockGasService } from '../services/mockGasService';
+import { LayoutDashboard, PlusCircle, List, Settings, Database, LogOut, Wifi, WifiOff, CloudLightning } from 'lucide-react';
+import { mockGasService, EnvType } from '../services/mockGasService';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -10,11 +9,11 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
-  const [isGasConnected, setIsGasConnected] = useState(false);
+  const [envType, setEnvType] = useState<EnvType>('mock');
 
   useEffect(() => {
-    // Check connection status on mount
-    setIsGasConnected(mockGasService.isGasEnvironment());
+    // Check connection environment on mount
+    setEnvType(mockGasService.getEnvironmentType());
   }, []);
   
   const NavItem = ({ view, icon, label }: { view: ViewState; icon: React.ReactNode; label: string }) => (
@@ -30,6 +29,37 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
       <span className="font-medium tracking-wide">{label}</span>
     </button>
   );
+
+  const getStatusDisplay = () => {
+      switch (envType) {
+          case 'gas':
+              return {
+                  bg: 'bg-emerald-900/30',
+                  border: 'border-emerald-800',
+                  text: 'text-emerald-400',
+                  icon: <Wifi size={14} />,
+                  label: '已連線 (GAS Embedded)'
+              };
+          case 'api':
+              return {
+                  bg: 'bg-blue-900/30',
+                  border: 'border-blue-800',
+                  text: 'text-blue-400',
+                  icon: <CloudLightning size={14} />,
+                  label: 'API 連線 (Vercel)'
+              };
+          default:
+              return {
+                  bg: 'bg-amber-900/30',
+                  border: 'border-amber-800',
+                  text: 'text-amber-500',
+                  icon: <WifiOff size={14} />,
+                  label: '模擬模式 (Local)'
+              };
+      }
+  };
+
+  const statusStyle = getStatusDisplay();
 
   return (
     <div className="w-64 bg-slate-900 h-screen flex flex-col p-4 fixed left-0 top-0 hidden md:flex text-slate-100">
@@ -67,9 +97,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
 
       <div className="mt-auto space-y-4">
          {/* Connection Status Indicator */}
-         <div className={`mx-2 px-3 py-2 rounded-md border text-xs font-bold flex items-center gap-2 ${isGasConnected ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-amber-900/30 border-amber-800 text-amber-500'}`}>
-            {isGasConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            <span>{isGasConnected ? '已連線 (Google Sheet)' : '模擬模式 (Local Mode)'}</span>
+         <div className={`mx-2 px-3 py-2 rounded-md border text-xs font-bold flex items-center gap-2 ${statusStyle.bg} ${statusStyle.border} ${statusStyle.text}`}>
+            {statusStyle.icon}
+            <span>{statusStyle.label}</span>
          </div>
 
          <div className="pt-2 border-t border-slate-800">

@@ -1,7 +1,8 @@
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ViewState } from '../types';
-import { LayoutDashboard, PlusCircle, List, Settings, Database, LogOut } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, List, Settings, Database, LogOut, Wifi, WifiOff } from 'lucide-react';
+import { mockGasService } from '../services/mockGasService';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -9,6 +10,12 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
+  const [isGasConnected, setIsGasConnected] = useState(false);
+
+  useEffect(() => {
+    // Check connection status on mount
+    setIsGasConnected(mockGasService.isGasEnvironment());
+  }, []);
   
   const NavItem = ({ view, icon, label }: { view: ViewState; icon: React.ReactNode; label: string }) => (
     <button
@@ -58,18 +65,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
         <NavItem view="inventory" icon={<Database size={18} />} label="商品庫存 (CSV)" />
       </nav>
 
-      <div className="mt-auto pt-6 border-t border-slate-800">
-         <button 
-            onClick={() => setView('settings')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors hover:bg-slate-800 ${currentView === 'settings' ? 'bg-brand-700 text-white shadow-md' : 'text-slate-400'}`}
-         >
-            <Settings size={18} />
-            <span className="font-medium">系統設定</span>
-         </button>
-         <button className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-slate-400 hover:text-red-400 transition-colors mt-1">
-            <LogOut size={18} />
-            <span className="font-medium">登出系統</span>
-         </button>
+      <div className="mt-auto space-y-4">
+         {/* Connection Status Indicator */}
+         <div className={`mx-2 px-3 py-2 rounded-md border text-xs font-bold flex items-center gap-2 ${isGasConnected ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-amber-900/30 border-amber-800 text-amber-500'}`}>
+            {isGasConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+            <span>{isGasConnected ? '已連線 (Google Sheet)' : '模擬模式 (Local Mode)'}</span>
+         </div>
+
+         <div className="pt-2 border-t border-slate-800">
+            <button 
+                onClick={() => setView('settings')}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors hover:bg-slate-800 ${currentView === 'settings' ? 'bg-brand-700 text-white shadow-md' : 'text-slate-400'}`}
+            >
+                <Settings size={18} />
+                <span className="font-medium">系統設定</span>
+            </button>
+            <button className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-slate-400 hover:text-red-400 transition-colors mt-1">
+                <LogOut size={18} />
+                <span className="font-medium">登出系統</span>
+            </button>
+         </div>
       </div>
     </div>
   );

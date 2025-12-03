@@ -24,8 +24,8 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 class HybridGasService {
   
-  // 偵測是否在 GAS 環境執行
-  private isGasEnvironment(): boolean {
+  // 偵測是否在 GAS 環境執行 (Public for UI check)
+  public isGasEnvironment(): boolean {
     return (
       typeof window !== 'undefined' && 
       (window as any).google && 

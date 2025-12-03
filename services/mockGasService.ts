@@ -1,3 +1,4 @@
+
 import { Order, Product, Customer, CalibrationStatus, CalibrationType, Technician } from '../types';
 
 // Mock Data (Fallback only)
@@ -49,6 +50,27 @@ class HybridGasService {
       return 'mock';
   }
 
+  // --- Helper: Normalize Keys (PascalCase -> camelCase) ---
+  // Fixes issue where Sheet headers are "OrderNumber" but frontend expects "orderNumber"
+  private normalizeData(data: any): any {
+    if (Array.isArray(data)) {
+      return data.map(item => this.normalizeData(item));
+    }
+    if (data !== null && typeof data === 'object') {
+      const newObj: any = {};
+      Object.keys(data).forEach(key => {
+        // Convert first char to lower case
+        let newKey = key.charAt(0).toLowerCase() + key.slice(1);
+        // Special case: "ID" -> "id"
+        if (key === 'ID') newKey = 'id';
+        
+        newObj[newKey] = this.normalizeData(data[key]);
+      });
+      return newObj;
+    }
+    return data;
+  }
+
   // --- API Caller (Standard fetch) ---
   private async callApi<T>(action: string, payload?: any): Promise<T> {
       try {
@@ -63,7 +85,8 @@ class HybridGasService {
           if (!json.success && (json.status === 'error' || json.error)) {
               throw new Error(json.error || 'API Error');
           }
-          return json.data as T;
+          // Normalize data keys before returning
+          return this.normalizeData(json.data) as T;
       } catch (error) {
           console.error(`API Call Failed [${action}]:`, error);
           throw error;
@@ -75,8 +98,13 @@ class HybridGasService {
     return new Promise((resolve, reject) => {
       (window as any).google.script.run
         .withSuccessHandler((response: any) => {
-            try { resolve(typeof response === 'string' ? JSON.parse(response) : response); } 
-            catch (e) { resolve(response); }
+            let data = response;
+            try { 
+                data = typeof response === 'string' ? JSON.parse(response) : response; 
+            } 
+            catch (e) { /* ignore */ }
+            // Normalize data keys before returning
+            resolve(this.normalizeData(data));
         })
         .withFailureHandler((error: any) => reject(error))
         [functionName](...args);

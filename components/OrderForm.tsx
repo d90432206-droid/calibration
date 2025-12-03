@@ -128,29 +128,34 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Helper: Get unique suggestions by grouping OrderNo + EqNo
-  const getUniqueSuggestions = (query: string, field: 'equipmentNumber' | 'equipmentName') => {
-      if (!query) return [];
-      const q = query.toLowerCase();
-      // 1. Filter matches
-      const matches = historicalOrders.filter(o => 
-          o[field] && o[field].toLowerCase().includes(q)
-      );
-
-      // 2. Deduplicate based on Order Number + Equipment Number (Distinct Job)
-      const seen = new Set();
-      const distinct: Order[] = [];
-      for (const m of matches) {
-          const key = `${m.orderNumber}-${m.equipmentNumber}`;
-          if (!seen.has(key)) {
-              seen.add(key);
-              distinct.push(m);
+  // --- Optimization: Pre-calculate Unique Equipment List ---
+  // Instead of filtering all orders on every keystroke, we build a unique index once when orders load.
+  const uniqueEquipmentHistory = useMemo(() => {
+      const map = new Map<string, Order>();
+      
+      // Sort by date desc first so the latest entry wins in the map (if we want latest)
+      // or just keep the first one found if order doesn't matter.
+      // Here we assume historicalOrders are potentially mixed, so we process them.
+      
+      historicalOrders.forEach(order => {
+          // Robust check: Ensure equipmentNumber exists
+          if (!order.equipmentNumber) return;
+          
+          const key = `${order.equipmentNumber.trim()}`;
+          // const key = `${order.equipmentNumber.trim()}|${(order.equipmentName || '').trim()}`; // Composite key if needed
+          
+          if (!map.has(key)) {
+              map.set(key, order);
+          } else {
+              // Optional: Update if this order is newer? 
+              // For now, first found (or last found depending on iteration) is fine for "Suggestion"
           }
-      }
-      return distinct.slice(0, 8);
-  };
+      });
+      
+      return Array.from(map.values());
+  }, [historicalOrders]);
 
-  // Helper: Get item count for a specific job
+  // Helper: Get item count for a specific job (Order + Eq match)
   const getJobItemCount = (order: Order) => {
       return historicalOrders.filter(o => 
           o.orderNumber === order.orderNumber && 
@@ -158,10 +163,29 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
       ).length;
   };
 
-  // --- Logic: Search Equipment Numbers (History Index) ---
-  const eqNumSuggestions = useMemo(() => 
-      getUniqueSuggestions(eqNumberQuery, 'equipmentNumber'), 
-  [eqNumberQuery, historicalOrders]);
+  // --- Logic: Search Equipment Numbers (Using Optimized Index) ---
+  const eqNumSuggestions = useMemo(() => {
+      if (!eqNumberQuery) return [];
+      const q = eqNumberQuery.toLowerCase().trim();
+      
+      return uniqueEquipmentHistory
+          .filter(o => String(o.equipmentNumber || '').toLowerCase().includes(q))
+          .slice(0, 8); // Limit results for performance
+  }, [eqNumberQuery, uniqueEquipmentHistory]);
+
+  // --- Logic: Search Equipment Names (Using Optimized Index) ---
+  // Note: For Equipment Name, we might want a different unique index if names are shared across numbers,
+  // but usually searching the same unique history is sufficient.
+  const eqNameSuggestions = useMemo(() => {
+      if (!eqNameQuery) return [];
+      const q = eqNameQuery.toLowerCase().trim();
+
+      // We filter the unique list by Name this time
+      return uniqueEquipmentHistory
+          .filter(o => String(o.equipmentName || '').toLowerCase().includes(q))
+          .slice(0, 8);
+  }, [eqNameQuery, uniqueEquipmentHistory]);
+
 
   const handleHistoricalSelect = (order: Order) => {
       // 1. Fill Header
@@ -170,6 +194,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
       if (order.customerName) setCustomerQuery(order.customerName);
       
       // 2. Find ALL items belonging to this Equipment in that Past Order
+      // (This still needs to search the full history to get all items of that specific past order)
       const relatedItems = historicalOrders.filter(o => 
           o.orderNumber === order.orderNumber && 
           o.equipmentNumber === order.equipmentNumber
@@ -213,17 +238,13 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
       setTimeout(() => setPrefillMessage(null), 3000);
   };
 
-  // --- Logic: Search Equipment Names (History Index) ---
-  const eqNameSuggestions = useMemo(() => 
-      getUniqueSuggestions(eqNameQuery, 'equipmentName'), 
-  [eqNameQuery, historicalOrders]);
-
 
   // --- Logic: Search Inventory Product (The Service Item) ---
   const productSuggestions = React.useMemo(() => {
       if (!productNameQuery) return [];
       const q = productNameQuery.toLowerCase();
-      return inventory.filter(p => p.name.toLowerCase().includes(q)).slice(0, 8);
+      // Safe string check
+      return inventory.filter(p => String(p.name || '').toLowerCase().includes(q)).slice(0, 8);
   }, [productNameQuery, inventory]);
 
   const handleProductSelect = (product: Product) => {
@@ -243,9 +264,11 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
     setShowCustomerSuggestions(false);
   };
 
-  const filteredCustomers = customers.filter(c =>
-    c.name.toLowerCase().includes(customerQuery.toLowerCase())
-  );
+  const filteredCustomers = useMemo(() => {
+      if (!customerQuery) return [];
+      const q = customerQuery.toLowerCase();
+      return customers.filter(c => String(c.name || '').toLowerCase().includes(q)).slice(0, 8);
+  }, [customers, customerQuery]);
 
   const handleTechnicianToggle = (tech: string) => {
       setSelectedTechnicians(prev => 

@@ -148,14 +148,19 @@ export const OrderList: React.FC<OrderListProps> = ({ orders, refreshData, onCop
   const confirmDelete = async () => {
       if (!orderToDelete) return;
 
-      const isValid = await mockGasService.checkAdminPassword(passwordInput);
-      if (isValid) {
-          await mockGasService.deleteOrderByNo(orderToDelete);
-          setDeleteModalOpen(false);
-          setOrderToDelete(null);
-          refreshData();
-      } else {
-          setDeleteError('密碼錯誤，無法刪除');
+      try {
+        const isValid = await mockGasService.checkAdminPassword(passwordInput.trim());
+        if (isValid) {
+            await mockGasService.deleteOrderByNo(orderToDelete);
+            setDeleteModalOpen(false);
+            setOrderToDelete(null);
+            refreshData();
+        } else {
+            setDeleteError('密碼錯誤，無法刪除');
+        }
+      } catch (e) {
+        console.error(e);
+        setDeleteError('連線錯誤，請稍後再試');
       }
   };
 
@@ -427,7 +432,7 @@ export const OrderList: React.FC<OrderListProps> = ({ orders, refreshData, onCop
                                                     <th className="px-3 py-2 font-medium text-right">小計</th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="divide-y divide-slate-50">
+                                            <tbody className="divide-y divide-slate-100">
                                                 {group.items.map(item => (
                                                     <tr key={item.id} className="hover:bg-slate-50">
                                                         <td className="px-3 py-2 font-bold text-slate-700">{item.productName}</td>

@@ -62,8 +62,6 @@ class HybridGasService {
         let newKey = key.charAt(0).toLowerCase() + key.slice(1);
         // Special case: "ID" -> "id"
         if (key === 'ID') newKey = 'id';
-        // Special case: "Technicians" (GAS often returns stringified JSON, parse it here if needed, 
-        // though our Code.gs usually handles parsing. Just in case.)
         
         newObj[newKey] = this.normalizeData(data[key]);
       });
@@ -134,12 +132,13 @@ class HybridGasService {
   // --- Methods ---
 
   async checkAdminPassword(input: string): Promise<boolean> {
-    if (this.isGasEnvironment()) return this.callGasBackend<boolean>('checkAdminPassword', input);
-    if (this.isApiEnvironment()) return this.callApi<boolean>('checkAdminPassword', input);
+    const cleanInput = (input || '').trim();
+    if (this.isGasEnvironment()) return this.callGasBackend<boolean>('checkAdminPassword', cleanInput);
+    if (this.isApiEnvironment()) return this.callApi<boolean>('checkAdminPassword', cleanInput);
     
     await delay(200);
     const stored = localStorage.getItem('cal_admin_pwd');
-    return input === (stored || '0000');
+    return cleanInput === (stored || '0000');
   }
 
   async changeAdminPassword(oldPwd: string, newPwd: string): Promise<boolean> {
@@ -228,12 +227,27 @@ class HybridGasService {
   }
 
   async getOrders(): Promise<Order[]> {
-    if (this.isGasEnvironment()) return this.callGasBackend<Order[]>('getOrders');
-    if (this.isApiEnvironment()) return this.callApi<Order[]>('getOrders');
+    let orders: Order[] = [];
+    
+    if (this.isGasEnvironment()) {
+        orders = await this.callGasBackend<Order[]>('getOrders');
+    } else if (this.isApiEnvironment()) {
+        orders = await this.callApi<Order[]>('getOrders');
+    } else {
+        await delay(400);
+        const stored = localStorage.getItem('cal_orders');
+        orders = stored ? JSON.parse(stored) : INITIAL_ORDERS;
+    }
 
-    await delay(400);
-    const stored = localStorage.getItem('cal_orders');
-    return stored ? JSON.parse(stored) : INITIAL_ORDERS;
+    // Garbage Collection: Filter out header rows or invalid data
+    // This removes rows where 'OrderNumber' (value) equals the header name 'OrderNumber' or is empty
+    return orders.filter(o => 
+        o && 
+        o.orderNumber && 
+        String(o.orderNumber).trim() !== '' &&
+        String(o.orderNumber).toLowerCase() !== 'ordernumber' && 
+        !String(o.orderNumber).includes('ID, OrderNumber') 
+    );
   }
 
   async checkOrderExists(orderNumber: string): Promise<boolean> {

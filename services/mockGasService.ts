@@ -1,135 +1,80 @@
 
 import { Order, Product, Customer, CalibrationStatus, CalibrationType, Technician } from '../types';
 
-// Mock Data for Customers
+// Mock Data for Customers (Fallback)
 const INITIAL_CUSTOMERS: Customer[] = [
   { id: 'c1', name: '科技實業股份有限公司', contactPerson: '王經理', phone: '02-22334455' },
   { id: 'c2', name: '航太精密組件', contactPerson: '李工程師', phone: '04-22334455' },
-  { id: 'c3', name: '精準實驗室', contactPerson: '張主任', phone: '03-55667788' },
-  { id: 'c4', name: '動力機械維修中心', contactPerson: '劉技師', phone: '07-88990011' },
 ];
 
-// Mock Data for Technicians
+// Mock Data for Technicians (Fallback)
 const INITIAL_TECHNICIANS: Technician[] = [
     { id: 't1', name: '陳小明' },
     { id: 't2', name: '林志豪' },
-    { id: 't3', name: '張雅雯' },
-    { id: 't4', name: '王大明' },
-    { id: 't5', name: '李小美' },
 ];
 
-// Mock Data to simulate "Product Inventory.CSV"
+// Mock Data for Inventory (Fallback)
 const INITIAL_INVENTORY: Product[] = [
-  { id: '1', name: '數位卡尺校正', specification: '0-150mm / 0.01mm', category: '長度量測', standardPrice: 1200, lastUpdated: '2023-10-01' },
-  { id: '2', name: '外徑分厘卡校正', specification: '0-25mm / 0.001mm', category: '長度量測', standardPrice: 1500, lastUpdated: '2023-10-05' },
-  { id: '3', name: '壓力錶校正', specification: '0-100 psi / Grade A', category: '壓力', standardPrice: 2200, lastUpdated: '2023-09-15' },
-  { id: '4', name: '三用電表校正 (Fluke)', specification: 'True RMS', category: '電學', standardPrice: 3500, lastUpdated: '2023-11-20' },
-  { id: '5', name: '扭力扳手校正', specification: '10-50 Nm / 3/8" Dr.', category: '扭力', standardPrice: 1800, lastUpdated: '2023-10-10' },
-  { id: '6', name: '溫度感測器校正', specification: 'Class A / -50~250°C', category: '溫度', standardPrice: 2800, lastUpdated: '2023-12-01' },
+  { id: '1', name: '數位卡尺校正', specification: '0-150mm', category: '長度', standardPrice: 1200, lastUpdated: '2023-10-01' },
 ];
 
-const INITIAL_ORDERS: Order[] = [
-  {
-    id: 'ord-001-1',
-    orderNumber: 'CAL-2023-001',
-    equipmentNumber: 'EQ-001',
-    equipmentName: '品管室數位卡尺',
-    customerName: '科技實業股份有限公司',
-    productId: '1',
-    productName: '數位卡尺校正',
-    productSpec: '0-150mm',
-    category: '長度量測',
-    calibrationType: CalibrationType.INTERNAL,
-    quantity: 1,
-    unitPrice: 1200,
-    discountRate: 100,
-    totalAmount: 1200,
-    status: CalibrationStatus.COMPLETED,
-    createDate: '2023-12-01T10:00:00Z',
-    targetDate: '2023-12-05T10:00:00Z',
-    technicians: ['陳小明'],
-    isArchived: true,
-    notes: '年度校正'
-  },
-  {
-    id: 'ord-001-2',
-    orderNumber: 'CAL-2023-001',
-    equipmentNumber: 'EQ-001',
-    equipmentName: '品管室數位卡尺',
-    customerName: '科技實業股份有限公司',
-    productId: '2',
-    productName: '深度規校正',
-    productSpec: '0-25mm',
-    category: '長度量測',
-    calibrationType: CalibrationType.INTERNAL,
-    quantity: 1,
-    unitPrice: 1500,
-    discountRate: 100,
-    totalAmount: 1500,
-    status: CalibrationStatus.COMPLETED,
-    createDate: '2023-12-01T10:00:00Z',
-    targetDate: '2023-12-05T10:00:00Z',
-    technicians: ['陳小明'],
-    isArchived: true,
-    notes: '年度校正'
-  },
-  {
-    id: 'ord-002',
-    orderNumber: 'CAL-2024-002',
-    equipmentNumber: 'EQ-099',
-    equipmentName: '產線高壓錶',
-    customerName: '航太精密組件',
-    productId: '3',
-    productName: '壓力錶校正',
-    productSpec: '0-100 psi',
-    category: '壓力',
-    calibrationType: CalibrationType.EXTERNAL,
-    quantity: 1,
-    unitPrice: 2200,
-    discountRate: 90,
-    totalAmount: 1980,
-    status: CalibrationStatus.CALIBRATING,
-    createDate: '2024-01-15T09:30:00Z',
-    targetDate: '2024-01-20T09:30:00Z',
-    technicians: ['林志豪', '張雅雯'],
-    isArchived: false,
-  },
-  {
-    id: 'ord-003',
-    orderNumber: 'CAL-2024-003',
-    equipmentNumber: 'EQ-105',
-    equipmentName: 'Fluke 87V 電表',
-    customerName: '精準實驗室',
-    productId: '4',
-    productName: '三用電表校正 (Fluke)',
-    productSpec: 'True RMS',
-    category: '電學',
-    calibrationType: CalibrationType.INTERNAL,
-    quantity: 3,
-    unitPrice: 3500,
-    discountRate: 95,
-    totalAmount: 9975,
-    status: CalibrationStatus.PENDING,
-    createDate: '2024-02-10T14:00:00Z',
-    targetDate: '2024-02-17T14:00:00Z',
-    technicians: ['陳小明'],
-    isArchived: false,
-  },
-];
+const INITIAL_ORDERS: Order[] = [];
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-class MockGasService {
+class HybridGasService {
+  
+  // 偵測是否在 GAS 環境執行
+  private isGasEnvironment(): boolean {
+    return (
+      typeof window !== 'undefined' && 
+      (window as any).google && 
+      (window as any).google.script && 
+      (window as any).google.script.run
+    );
+  }
+
+  // --- GAS Caller Helper ---
+  private callGasBackend<T>(functionName: string, ...args: any[]): Promise<T> {
+    return new Promise((resolve, reject) => {
+      if (!this.isGasEnvironment()) {
+        reject('Not in GAS environment');
+        return;
+      }
+      (window as any).google.script.run
+        .withSuccessHandler((response: any) => {
+            // GAS return JSON usually needs parsing if we sent string, 
+            // but here we assume getDataAsJSON returns object directly or JSON string
+            try {
+                // If backend returns a JSON string, parse it. If object, use it.
+                resolve(typeof response === 'string' ? JSON.parse(response) : response);
+            } catch (e) {
+                resolve(response);
+            }
+        })
+        .withFailureHandler((error: any) => {
+            console.error(`GAS Call Failed: ${functionName}`, error);
+            reject(error);
+        })
+        [functionName](...args);
+    });
+  }
+
   // --- Admin Security ---
   async checkAdminPassword(input: string): Promise<boolean> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<boolean>('checkAdminPassword', input);
+    }
     await delay(200);
     const stored = localStorage.getItem('cal_admin_pwd');
-    // Default password is '0000' if not set
     const currentPwd = stored || '0000';
     return input === currentPwd;
   }
 
   async changeAdminPassword(oldPwd: string, newPwd: string): Promise<boolean> {
+      if (this.isGasEnvironment()) {
+          return this.callGasBackend<boolean>('changeAdminPassword', oldPwd, newPwd);
+      }
       await delay(300);
       const isValid = await this.checkAdminPassword(oldPwd);
       if (isValid) {
@@ -141,6 +86,9 @@ class MockGasService {
 
   // --- Inventory ---
   async getInventory(): Promise<Product[]> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<Product[]>('getInventory');
+    }
     await delay(300);
     const stored = localStorage.getItem('cal_inventory');
     if (!stored) {
@@ -151,6 +99,10 @@ class MockGasService {
   }
 
   async addProduct(product: Omit<Product, 'id'>): Promise<Product> {
+    if (this.isGasEnvironment()) {
+        // GAS version: ID is generated by backend
+        return this.callGasBackend<Product>('addProduct', product);
+    }
     await delay(300);
     const products = await this.getInventory();
     const newProduct: Product = {
@@ -165,6 +117,9 @@ class MockGasService {
 
   // --- Customers ---
   async getCustomers(): Promise<Customer[]> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<Customer[]>('getCustomers');
+    }
     await delay(200);
     const stored = localStorage.getItem('cal_customers');
     if (!stored) {
@@ -175,6 +130,9 @@ class MockGasService {
   }
 
   async addCustomer(name: string): Promise<Customer> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<Customer>('addCustomer', name);
+    }
     await delay(200);
     const customers = await this.getCustomers();
     const newCustomer: Customer = {
@@ -188,6 +146,9 @@ class MockGasService {
 
   // --- Technicians ---
   async getTechnicians(): Promise<Technician[]> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<Technician[]>('getTechnicians');
+    }
     await delay(200);
     const stored = localStorage.getItem('cal_technicians');
     if (!stored) {
@@ -198,6 +159,9 @@ class MockGasService {
   }
 
   async addTechnician(name: string): Promise<Technician> {
+      if (this.isGasEnvironment()) {
+          return this.callGasBackend<Technician>('addTechnician', name);
+      }
       await delay(200);
       const technicians = await this.getTechnicians();
       const newTech = { id: 't-' + Math.random().toString(36).substr(2, 5), name };
@@ -207,6 +171,9 @@ class MockGasService {
   }
 
   async removeTechnician(id: string): Promise<void> {
+      if (this.isGasEnvironment()) {
+          return this.callGasBackend<void>('removeTechnician', id);
+      }
       await delay(200);
       const technicians = await this.getTechnicians();
       const updated = technicians.filter(t => t.id !== id);
@@ -215,6 +182,9 @@ class MockGasService {
 
   // --- Orders ---
   async getOrders(): Promise<Order[]> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<Order[]>('getOrders');
+    }
     await delay(400);
     const stored = localStorage.getItem('cal_orders');
     if (!stored) {
@@ -225,6 +195,9 @@ class MockGasService {
   }
 
   async checkOrderExists(orderNumber: string): Promise<boolean> {
+      if (this.isGasEnvironment()) {
+          return this.callGasBackend<boolean>('checkOrderExists', orderNumber);
+      }
       const orders = await this.getOrders();
       return orders.some(o => o.orderNumber === orderNumber);
   }
@@ -233,13 +206,18 @@ class MockGasService {
       ordersData: Omit<Order, 'id' | 'totalAmount' | 'createDate' | 'isArchived'>[], 
       manualOrderNumber: string
     ): Promise<void> {
+    
+    if (this.isGasEnvironment()) {
+        // Send as JSON string to ensure arrays/objects travel safely
+        return this.callGasBackend<void>('createOrders', JSON.stringify(ordersData), manualOrderNumber);
+    }
+
     await delay(800);
     const existingOrders = await this.getOrders();
     const createDate = new Date().toISOString();
 
     const newOrders: Order[] = ordersData.map(data => {
         // Calculate Total: (Price * Qty) * (Discount / 100)
-        // Example: Discount 80 (80%) -> Multiplier 0.8
         const subtotal = data.unitPrice * data.quantity;
         const discountMultiplier = data.discountRate / 100;
         
@@ -259,6 +237,10 @@ class MockGasService {
 
   // BATCH UPDATE: Update all items with same Order Number
   async updateOrderStatusByNo(orderNumber: string, newStatus: CalibrationStatus): Promise<void> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<void>('updateOrderStatusByNo', orderNumber, newStatus);
+    }
+
     await delay(200);
     const orders = await this.getOrders();
     let updated = false;
@@ -266,7 +248,6 @@ class MockGasService {
     orders.forEach(o => {
         if (o.orderNumber === orderNumber) {
             o.status = newStatus;
-            // Auto Archive if Completed
             if (newStatus === CalibrationStatus.COMPLETED) {
                 o.isArchived = true;
             }
@@ -280,6 +261,9 @@ class MockGasService {
   }
 
   async updateOrderNotesByNo(orderNumber: string, notes: string): Promise<void> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<void>('updateOrderNotesByNo', orderNumber, notes);
+    }
     await delay(200);
     const orders = await this.getOrders();
     let updated = false;
@@ -295,6 +279,9 @@ class MockGasService {
   }
 
   async updateOrderTargetDateByNo(orderNumber: string, newDate: string): Promise<void> {
+    if (this.isGasEnvironment()) {
+        return this.callGasBackend<void>('updateOrderTargetDateByNo', orderNumber, newDate);
+    }
     await delay(200);
     const orders = await this.getOrders();
     let updated = false;
@@ -314,16 +301,18 @@ class MockGasService {
     }
   }
   
-  // RESTORE BATCH: Restore all items with same Order Number
   async restoreOrderByNo(orderNumber: string, reason: string): Promise<void> {
+      if (this.isGasEnvironment()) {
+          return this.callGasBackend<void>('restoreOrderByNo', orderNumber, reason);
+      }
       await delay(200);
       const orders = await this.getOrders();
       let updated = false;
 
       orders.forEach(o => {
           if (o.orderNumber === orderNumber) {
-              o.isArchived = false; // Set archived to false
-              o.status = CalibrationStatus.PENDING; // Reset status to Pending
+              o.isArchived = false;
+              o.status = CalibrationStatus.PENDING;
               o.resurrectReason = reason;
               o.notes = o.notes 
                 ? `${o.notes} (復活: ${reason})` 
@@ -337,8 +326,10 @@ class MockGasService {
       }
   }
 
-  // DELETE BATCH: Delete all items with same Order Number
   async deleteOrderByNo(orderNumber: string): Promise<void> {
+      if (this.isGasEnvironment()) {
+          return this.callGasBackend<void>('deleteOrderByNo', orderNumber);
+      }
       await delay(500);
       const orders = await this.getOrders();
       const filteredOrders = orders.filter(o => o.orderNumber !== orderNumber);
@@ -346,4 +337,4 @@ class MockGasService {
   }
 }
 
-export const mockGasService = new MockGasService();
+export const mockGasService = new HybridGasService();

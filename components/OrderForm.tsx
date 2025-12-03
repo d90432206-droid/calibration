@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Product, Customer, CalibrationStatus, CalibrationType, OrderTemplate, CalibrationTypeLabel, Order, Technician } from '../types';
 import { mockGasService } from '../services/mockGasService';
-import { Save, Plus, Trash2, ShoppingCart, User, Archive, FileText, Building2, TicketPercent, Search, History, Package, Monitor, ArrowDownCircle, CheckSquare, Square } from 'lucide-react';
+import { Save, Plus, Trash2, ShoppingCart, User, Archive, FileText, Building2, Percent, Search, History, Package, Monitor, ArrowDownCircle, CheckSquare, Square } from 'lucide-react';
 
 interface OrderFormProps {
   onOrderCreated: () => void;
@@ -793,7 +793,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
                 <div className="p-4 border-t border-slate-100 bg-slate-50 space-y-3">
                     <div className="flex justify-end items-center gap-3">
                          <div className="flex items-center gap-2 text-sm text-slate-600">
-                             <TicketPercent size={16} />
+                             <Percent size={16} />
                              折數 (%):
                          </div>
                          <input 

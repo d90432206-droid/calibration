@@ -62,8 +62,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
 
   const statusStyle = getStatusDisplay();
 
+  // Updated: Removed 'w-64', 'fixed', 'hidden md:flex' to allow App.tsx to control layout/visibility
   return (
-    <div className="w-64 bg-slate-900 h-screen flex flex-col p-4 fixed left-0 top-0 hidden md:flex text-slate-100">
+    <div className="w-full h-full bg-slate-900 flex flex-col p-4 text-slate-100">
       <div className="flex items-center gap-3 px-2 mb-10 mt-4">
         {/* Logo Image Replacement */}
         <div className="flex-shrink-0">

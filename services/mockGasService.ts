@@ -1,3 +1,4 @@
+
 import { Order, Product, Customer, CalibrationStatus, CalibrationType, Technician } from '../types';
 
 // Mock Data (Fallback only)
@@ -16,8 +17,19 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export type EnvType = 'gas' | 'api' | 'mock';
 
+// Simple In-Memory Cache Interface
+interface CacheItem<T> {
+    data: T;
+    timestamp: number;
+}
+
 class HybridGasService {
-  private apiUrl: string = import.meta.env.VITE_GAS_API_URL || '';
+  private apiUrl: string = (import.meta as any).env?.VITE_GAS_API_URL || '';
+  
+  // Cache Store
+  private cache: Record<string, CacheItem<any>> = {};
+  // Cache TTL (Time To Live) in milliseconds (e.g., 5 minutes)
+  private readonly CACHE_TTL = 5 * 60 * 1000; 
 
   constructor() {
     console.log('--- System Connection Init ---');
@@ -28,6 +40,38 @@ class HybridGasService {
     } else {
         console.log('✅ API URL detected. System is in API Mode.');
     }
+  }
+
+  // --- Cache Methods ---
+  private getCache<T>(key: string): T | null {
+      const item = this.cache[key];
+      if (!item) return null;
+      
+      const now = Date.now();
+      if (now - item.timestamp > this.CACHE_TTL) {
+          delete this.cache[key];
+          return null; // Cache expired
+      }
+      console.log(`⚡ Using Cache for [${key}]`);
+      return item.data as T;
+  }
+
+  private setCache<T>(key: string, data: T): void {
+      this.cache[key] = {
+          data,
+          timestamp: Date.now()
+      };
+  }
+
+  private clearCache(keyPrefix?: string): void {
+      if (keyPrefix) {
+          Object.keys(this.cache).forEach(key => {
+              if (key.startsWith(keyPrefix)) delete this.cache[key];
+          });
+      } else {
+          this.cache = {};
+      }
+      console.log(`🧹 Cache cleared ${keyPrefix ? `for prefix: ${keyPrefix}` : 'entirely'}`);
   }
 
   public isGasEnvironment(): boolean {
@@ -50,7 +94,6 @@ class HybridGasService {
   }
 
   // --- Helper: Normalize Keys (PascalCase -> camelCase) ---
-  // Fixes issue where Sheet headers are "OrderNumber" but frontend expects "orderNumber"
   private normalizeData(data: any): any {
     if (Array.isArray(data)) {
       return data.map(item => this.normalizeData(item));
@@ -58,11 +101,8 @@ class HybridGasService {
     if (data !== null && typeof data === 'object') {
       const newObj: any = {};
       Object.keys(data).forEach(key => {
-        // Convert first char to lower case
         let newKey = key.charAt(0).toLowerCase() + key.slice(1);
-        // Special case: "ID" -> "id"
         if (key === 'ID') newKey = 'id';
-        
         newObj[newKey] = this.normalizeData(data[key]);
       });
       return newObj;
@@ -86,18 +126,11 @@ class HybridGasService {
               throw new Error(json.error || 'API Error');
           }
 
-          // Debug log for data structure
           if (Array.isArray(json.data) && json.data.length > 0) {
               console.log(`📥 API Response [${action}] Sample Key Check:`, Object.keys(json.data[0]));
           }
 
-          // Normalize data keys before returning
           const normalized = this.normalizeData(json.data);
-          
-          if (Array.isArray(normalized) && normalized.length > 0) {
-             console.log(`✨ Normalized Data [${action}] Sample Key Check:`, Object.keys(normalized[0]));
-          }
-
           return normalized as T;
       } catch (error) {
           console.error(`❌ API Call Failed [${action}]:`, error);
@@ -115,10 +148,7 @@ class HybridGasService {
                 data = typeof response === 'string' ? JSON.parse(response) : response; 
             } 
             catch (e) { /* ignore */ }
-            
             console.log(`📥 GAS Response [${functionName}] Raw:`, data);
-            
-            // Normalize data keys before returning
             resolve(this.normalizeData(data));
         })
         .withFailureHandler((error: any) => {
@@ -154,81 +184,143 @@ class HybridGasService {
       return false;
   }
 
-  async getInventory(): Promise<Product[]> {
-    if (this.isGasEnvironment()) return this.callGasBackend<Product[]>('getInventory');
-    if (this.isApiEnvironment()) return this.callApi<Product[]>('getInventory');
+  async getInventory(forceRefresh = false): Promise<Product[]> {
+    if (!forceRefresh) {
+        const cached = this.getCache<Product[]>('inventory');
+        if (cached) return cached;
+    }
 
-    await delay(300);
-    const stored = localStorage.getItem('cal_inventory');
-    return stored ? JSON.parse(stored) : INITIAL_INVENTORY;
+    let data: Product[];
+    if (this.isGasEnvironment()) {
+        data = await this.callGasBackend<Product[]>('getInventory');
+    } else if (this.isApiEnvironment()) {
+        data = await this.callApi<Product[]>('getInventory');
+    } else {
+        await delay(300);
+        const stored = localStorage.getItem('cal_inventory');
+        data = stored ? JSON.parse(stored) : INITIAL_INVENTORY;
+    }
+    
+    this.setCache('inventory', data);
+    return data;
   }
 
   async addProduct(product: Omit<Product, 'id'>): Promise<Product> {
-    if (this.isGasEnvironment()) return this.callGasBackend<Product>('addProduct', product);
-    if (this.isApiEnvironment()) return this.callApi<Product>('addProduct', product);
-
-    await delay(300);
-    const products = await this.getInventory();
-    const newProduct: Product = { ...product, id: Date.now().toString(), lastUpdated: new Date().toISOString() };
-    products.push(newProduct);
-    localStorage.setItem('cal_inventory', JSON.stringify(products));
+    let newProduct: Product;
+    
+    if (this.isGasEnvironment()) {
+        newProduct = await this.callGasBackend<Product>('addProduct', product);
+    } else if (this.isApiEnvironment()) {
+        newProduct = await this.callApi<Product>('addProduct', product);
+    } else {
+        await delay(300);
+        const products = await this.getInventory(true); // Force fetch local
+        newProduct = { ...product, id: Date.now().toString(), lastUpdated: new Date().toISOString() };
+        products.push(newProduct);
+        localStorage.setItem('cal_inventory', JSON.stringify(products));
+    }
+    
+    this.clearCache('inventory'); // Invalidate cache
     return newProduct;
   }
 
-  async getCustomers(): Promise<Customer[]> {
-    if (this.isGasEnvironment()) return this.callGasBackend<Customer[]>('getCustomers');
-    if (this.isApiEnvironment()) return this.callApi<Customer[]>('getCustomers');
+  async getCustomers(forceRefresh = false): Promise<Customer[]> {
+    if (!forceRefresh) {
+        const cached = this.getCache<Customer[]>('customers');
+        if (cached) return cached;
+    }
 
-    await delay(200);
-    const stored = localStorage.getItem('cal_customers');
-    return stored ? JSON.parse(stored) : INITIAL_CUSTOMERS;
+    let data: Customer[];
+    if (this.isGasEnvironment()) {
+        data = await this.callGasBackend<Customer[]>('getCustomers');
+    } else if (this.isApiEnvironment()) {
+        data = await this.callApi<Customer[]>('getCustomers');
+    } else {
+        await delay(200);
+        const stored = localStorage.getItem('cal_customers');
+        data = stored ? JSON.parse(stored) : INITIAL_CUSTOMERS;
+    }
+
+    this.setCache('customers', data);
+    return data;
   }
 
   async addCustomer(name: string): Promise<Customer> {
-    if (this.isGasEnvironment()) return this.callGasBackend<Customer>('addCustomer', name);
-    if (this.isApiEnvironment()) return this.callApi<Customer>('addCustomer', name);
-
-    await delay(200);
-    const customers = await this.getCustomers();
-    const newCustomer = { id: 'c-' + Date.now(), name };
-    customers.push(newCustomer);
-    localStorage.setItem('cal_customers', JSON.stringify(customers));
+    let newCustomer: Customer;
+    if (this.isGasEnvironment()) {
+        newCustomer = await this.callGasBackend<Customer>('addCustomer', name);
+    } else if (this.isApiEnvironment()) {
+        newCustomer = await this.callApi<Customer>('addCustomer', name);
+    } else {
+        await delay(200);
+        const customers = await this.getCustomers(true);
+        newCustomer = { id: 'c-' + Date.now(), name };
+        customers.push(newCustomer);
+        localStorage.setItem('cal_customers', JSON.stringify(customers));
+    }
+    
+    this.clearCache('customers');
     return newCustomer;
   }
 
-  async getTechnicians(): Promise<Technician[]> {
-    if (this.isGasEnvironment()) return this.callGasBackend<Technician[]>('getTechnicians');
-    if (this.isApiEnvironment()) return this.callApi<Technician[]>('getTechnicians');
+  async getTechnicians(forceRefresh = false): Promise<Technician[]> {
+    if (!forceRefresh) {
+        const cached = this.getCache<Technician[]>('technicians');
+        if (cached) return cached;
+    }
 
-    await delay(200);
-    const stored = localStorage.getItem('cal_technicians');
-    return stored ? JSON.parse(stored) : INITIAL_TECHNICIANS;
+    let data: Technician[];
+    if (this.isGasEnvironment()) {
+        data = await this.callGasBackend<Technician[]>('getTechnicians');
+    } else if (this.isApiEnvironment()) {
+        data = await this.callApi<Technician[]>('getTechnicians');
+    } else {
+        await delay(200);
+        const stored = localStorage.getItem('cal_technicians');
+        data = stored ? JSON.parse(stored) : INITIAL_TECHNICIANS;
+    }
+
+    this.setCache('technicians', data);
+    return data;
   }
 
   async addTechnician(name: string): Promise<Technician> {
-      if (this.isGasEnvironment()) return this.callGasBackend<Technician>('addTechnician', name);
-      if (this.isApiEnvironment()) return this.callApi<Technician>('addTechnician', name);
-
-      await delay(200);
-      const techs = await this.getTechnicians();
-      const newTech = { id: 't-' + Date.now(), name };
-      techs.push(newTech);
-      localStorage.setItem('cal_technicians', JSON.stringify(techs));
+      let newTech: Technician;
+      if (this.isGasEnvironment()) {
+          newTech = await this.callGasBackend<Technician>('addTechnician', name);
+      } else if (this.isApiEnvironment()) {
+          newTech = await this.callApi<Technician>('addTechnician', name);
+      } else {
+          await delay(200);
+          const techs = await this.getTechnicians(true);
+          newTech = { id: 't-' + Date.now(), name };
+          techs.push(newTech);
+          localStorage.setItem('cal_technicians', JSON.stringify(techs));
+      }
+      this.clearCache('technicians');
       return newTech;
   }
 
   async removeTechnician(id: string): Promise<void> {
-      if (this.isGasEnvironment()) return this.callGasBackend<void>('removeTechnician', id);
-      if (this.isApiEnvironment()) return this.callApi<void>('removeTechnician', id);
-
-      await delay(200);
-      const techs = await this.getTechnicians();
-      localStorage.setItem('cal_technicians', JSON.stringify(techs.filter(t => t.id !== id)));
+      if (this.isGasEnvironment()) await this.callGasBackend<void>('removeTechnician', id);
+      else if (this.isApiEnvironment()) await this.callApi<void>('removeTechnician', id);
+      else {
+          await delay(200);
+          const techs = await this.getTechnicians(true);
+          localStorage.setItem('cal_technicians', JSON.stringify(techs.filter(t => t.id !== id)));
+      }
+      this.clearCache('technicians');
   }
 
-  async getOrders(): Promise<Order[]> {
+  async getOrders(forceRefresh = false): Promise<Order[]> {
+    // 1. Try Cache
+    if (!forceRefresh) {
+        const cached = this.getCache<Order[]>('orders');
+        if (cached) return cached;
+    }
+
+    // 2. Fetch Data
     let orders: Order[] = [];
-    
     if (this.isGasEnvironment()) {
         orders = await this.callGasBackend<Order[]>('getOrders');
     } else if (this.isApiEnvironment()) {
@@ -239,95 +331,109 @@ class HybridGasService {
         orders = stored ? JSON.parse(stored) : INITIAL_ORDERS;
     }
 
-    // Garbage Collection: Filter out header rows or invalid data
-    // This removes rows where 'OrderNumber' (value) equals the header name 'OrderNumber' or is empty
-    return orders.filter(o => 
+    // 3. Filter Garbage
+    const cleanOrders = orders.filter(o => 
         o && 
         o.orderNumber && 
         String(o.orderNumber).trim() !== '' &&
         String(o.orderNumber).toLowerCase() !== 'ordernumber' && 
         !String(o.orderNumber).includes('ID, OrderNumber') 
     );
+
+    // 4. Update Cache
+    this.setCache('orders', cleanOrders);
+    return cleanOrders;
   }
 
   async checkOrderExists(orderNumber: string): Promise<boolean> {
-      if (this.isGasEnvironment()) return this.callGasBackend<boolean>('checkOrderExists', orderNumber);
-      if (this.isApiEnvironment()) return this.callApi<boolean>('checkOrderExists', orderNumber);
-
-      const orders = await this.getOrders();
+      // For check exists, we might want fresh data, or we can check cache first if we trust it
+      const orders = await this.getOrders(); // uses cache by default if available
       return orders.some(o => o.orderNumber === orderNumber);
   }
 
   async createOrders(ordersData: any[], manualOrderNumber: string): Promise<void> {
-    if (this.isGasEnvironment()) return this.callGasBackend<void>('createOrders', JSON.stringify(ordersData), manualOrderNumber);
-    if (this.isApiEnvironment()) return this.callApi<void>('createOrders', { ordersData, manualOrderNumber });
-
-    await delay(800);
-    const existing = await this.getOrders();
-    const newOrders = ordersData.map(d => ({
-        ...d,
-        id: Date.now().toString() + Math.random(),
-        orderNumber: manualOrderNumber,
-        totalAmount: Math.round(d.unitPrice * d.quantity * (d.discountRate/100)),
-        createDate: new Date().toISOString(),
-        isArchived: false
-    }));
-    localStorage.setItem('cal_orders', JSON.stringify([...newOrders, ...existing]));
+    if (this.isGasEnvironment()) await this.callGasBackend<void>('createOrders', JSON.stringify(ordersData), manualOrderNumber);
+    else if (this.isApiEnvironment()) await this.callApi<void>('createOrders', { ordersData, manualOrderNumber });
+    else {
+        await delay(800);
+        const existing = await this.getOrders(true);
+        const newOrders = ordersData.map(d => ({
+            ...d,
+            id: Date.now().toString() + Math.random(),
+            orderNumber: manualOrderNumber,
+            totalAmount: Math.round(d.unitPrice * d.quantity * (d.discountRate/100)),
+            createDate: new Date().toISOString(),
+            isArchived: false
+        }));
+        localStorage.setItem('cal_orders', JSON.stringify([...newOrders, ...existing]));
+    }
+    
+    this.clearCache('orders'); // Invalidate cache
   }
 
   async updateOrderStatusByNo(orderNumber: string, newStatus: CalibrationStatus): Promise<void> {
-    if (this.isGasEnvironment()) return this.callGasBackend<void>('updateOrderStatusByNo', orderNumber, newStatus);
-    if (this.isApiEnvironment()) return this.callApi<void>('updateOrderStatusByNo', { orderNumber, newStatus });
-
-    const orders = await this.getOrders();
-    orders.forEach(o => {
-        if(o.orderNumber === orderNumber) {
-            o.status = newStatus;
-            if(newStatus === CalibrationStatus.COMPLETED) o.isArchived = true;
-        }
-    });
-    localStorage.setItem('cal_orders', JSON.stringify(orders));
+    if (this.isGasEnvironment()) await this.callGasBackend<void>('updateOrderStatusByNo', orderNumber, newStatus);
+    else if (this.isApiEnvironment()) await this.callApi<void>('updateOrderStatusByNo', { orderNumber, newStatus });
+    else {
+        const orders = await this.getOrders(true);
+        orders.forEach(o => {
+            if(o.orderNumber === orderNumber) {
+                o.status = newStatus;
+                if(newStatus === CalibrationStatus.COMPLETED) o.isArchived = true;
+            }
+        });
+        localStorage.setItem('cal_orders', JSON.stringify(orders));
+    }
+    this.clearCache('orders');
   }
 
   async updateOrderNotesByNo(orderNumber: string, notes: string): Promise<void> {
-    if (this.isGasEnvironment()) return this.callGasBackend<void>('updateOrderNotesByNo', orderNumber, notes);
-    if (this.isApiEnvironment()) return this.callApi<void>('updateOrderNotesByNo', { orderNumber, notes });
-
-    const orders = await this.getOrders();
-    orders.forEach(o => { if(o.orderNumber === orderNumber) o.notes = notes; });
-    localStorage.setItem('cal_orders', JSON.stringify(orders));
+    if (this.isGasEnvironment()) await this.callGasBackend<void>('updateOrderNotesByNo', orderNumber, notes);
+    else if (this.isApiEnvironment()) await this.callApi<void>('updateOrderNotesByNo', { orderNumber, notes });
+    else {
+        const orders = await this.getOrders(true);
+        orders.forEach(o => { if(o.orderNumber === orderNumber) o.notes = notes; });
+        localStorage.setItem('cal_orders', JSON.stringify(orders));
+    }
+    this.clearCache('orders');
   }
 
   async updateOrderTargetDateByNo(orderNumber: string, newDate: string): Promise<void> {
-    if (this.isGasEnvironment()) return this.callGasBackend<void>('updateOrderTargetDateByNo', orderNumber, newDate);
-    if (this.isApiEnvironment()) return this.callApi<void>('updateOrderTargetDateByNo', { orderNumber, newDate });
-
-    const orders = await this.getOrders();
-    orders.forEach(o => { if(o.orderNumber === orderNumber) o.targetDate = new Date(newDate).toISOString(); });
-    localStorage.setItem('cal_orders', JSON.stringify(orders));
+    if (this.isGasEnvironment()) await this.callGasBackend<void>('updateOrderTargetDateByNo', orderNumber, newDate);
+    else if (this.isApiEnvironment()) await this.callApi<void>('updateOrderTargetDateByNo', { orderNumber, newDate });
+    else {
+        const orders = await this.getOrders(true);
+        orders.forEach(o => { if(o.orderNumber === orderNumber) o.targetDate = new Date(newDate).toISOString(); });
+        localStorage.setItem('cal_orders', JSON.stringify(orders));
+    }
+    this.clearCache('orders');
   }
   
   async restoreOrderByNo(orderNumber: string, reason: string): Promise<void> {
-      if (this.isGasEnvironment()) return this.callGasBackend<void>('restoreOrderByNo', orderNumber, reason);
-      if (this.isApiEnvironment()) return this.callApi<void>('restoreOrderByNo', { orderNumber, reason });
-
-      const orders = await this.getOrders();
-      orders.forEach(o => {
-          if (o.orderNumber === orderNumber) {
-              o.isArchived = false;
-              o.status = CalibrationStatus.PENDING;
-              o.resurrectReason = reason;
-          }
-      });
-      localStorage.setItem('cal_orders', JSON.stringify(orders));
+      if (this.isGasEnvironment()) await this.callGasBackend<void>('restoreOrderByNo', orderNumber, reason);
+      else if (this.isApiEnvironment()) await this.callApi<void>('restoreOrderByNo', { orderNumber, reason });
+      else {
+          const orders = await this.getOrders(true);
+          orders.forEach(o => {
+              if (o.orderNumber === orderNumber) {
+                  o.isArchived = false;
+                  o.status = CalibrationStatus.PENDING;
+                  o.resurrectReason = reason;
+              }
+          });
+          localStorage.setItem('cal_orders', JSON.stringify(orders));
+      }
+      this.clearCache('orders');
   }
 
   async deleteOrderByNo(orderNumber: string): Promise<void> {
-      if (this.isGasEnvironment()) return this.callGasBackend<void>('deleteOrderByNo', orderNumber);
-      if (this.isApiEnvironment()) return this.callApi<void>('deleteOrderByNo', { orderNumber });
-
-      const orders = await this.getOrders();
-      localStorage.setItem('cal_orders', JSON.stringify(orders.filter(o => o.orderNumber !== orderNumber)));
+      if (this.isGasEnvironment()) await this.callGasBackend<void>('deleteOrderByNo', orderNumber);
+      else if (this.isApiEnvironment()) await this.callApi<void>('deleteOrderByNo', { orderNumber });
+      else {
+          const orders = await this.getOrders(true);
+          localStorage.setItem('cal_orders', JSON.stringify(orders.filter(o => o.orderNumber !== orderNumber)));
+      }
+      this.clearCache('orders');
   }
 }
 

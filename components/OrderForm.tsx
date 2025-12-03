@@ -291,7 +291,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
     setHasAttemptedSubmit(true);
     
     // Validation
-    const missingFields = [];
+    const missingFields: string[] = [];
     if (!orderNumber.trim()) missingFields.push('校正訂單編號');
     if (!customerQuery.trim()) missingFields.push('客戶名稱');
     if (!targetDate) missingFields.push('預計完成日');

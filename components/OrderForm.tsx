@@ -85,9 +85,9 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
 
     if (copyData) {
         // Copy Header Info
-        setCustomerQuery(copyData.customerName || '');
-        setEqNumberQuery(copyData.equipmentNumber || '');
-        setEqNameQuery(copyData.equipmentName || '');
+        setCustomerQuery(String(copyData.customerName || ''));
+        setEqNumberQuery(String(copyData.equipmentNumber || ''));
+        setEqNameQuery(String(copyData.equipmentName || ''));
         setSelectedTechnicians(copyData.technicians || []);
         setDiscountRate(copyData.discountRate || 100);
         
@@ -129,26 +129,18 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   }, []);
 
   // --- Optimization: Pre-calculate Unique Equipment List ---
-  // Instead of filtering all orders on every keystroke, we build a unique index once when orders load.
+  // Fix: Safe string conversion to prevent crashes if DB returns numbers
   const uniqueEquipmentHistory = useMemo(() => {
       const map = new Map<string, Order>();
       
-      // Sort by date desc first so the latest entry wins in the map (if we want latest)
-      // or just keep the first one found if order doesn't matter.
-      // Here we assume historicalOrders are potentially mixed, so we process them.
-      
       historicalOrders.forEach(order => {
-          // Robust check: Ensure equipmentNumber exists
           if (!order.equipmentNumber) return;
           
-          const key = `${order.equipmentNumber.trim()}`;
-          // const key = `${order.equipmentNumber.trim()}|${(order.equipmentName || '').trim()}`; // Composite key if needed
+          // CRITICAL FIX: Cast to String() before trimming
+          const key = String(order.equipmentNumber).trim();
           
           if (!map.has(key)) {
               map.set(key, order);
-          } else {
-              // Optional: Update if this order is newer? 
-              // For now, first found (or last found depending on iteration) is fine for "Suggestion"
           }
       });
       
@@ -158,15 +150,15 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   // Helper: Get item count for a specific job (Order + Eq match)
   const getJobItemCount = (order: Order) => {
       return historicalOrders.filter(o => 
-          o.orderNumber === order.orderNumber && 
-          o.equipmentNumber === order.equipmentNumber
+          String(o.orderNumber) === String(order.orderNumber) && 
+          String(o.equipmentNumber) === String(order.equipmentNumber)
       ).length;
   };
 
   // --- Logic: Search Equipment Numbers (Using Optimized Index) ---
   const eqNumSuggestions = useMemo(() => {
       if (!eqNumberQuery) return [];
-      const q = eqNumberQuery.toLowerCase().trim();
+      const q = String(eqNumberQuery).toLowerCase().trim();
       
       return uniqueEquipmentHistory
           .filter(o => String(o.equipmentNumber || '').toLowerCase().includes(q))
@@ -174,11 +166,9 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   }, [eqNumberQuery, uniqueEquipmentHistory]);
 
   // --- Logic: Search Equipment Names (Using Optimized Index) ---
-  // Note: For Equipment Name, we might want a different unique index if names are shared across numbers,
-  // but usually searching the same unique history is sufficient.
   const eqNameSuggestions = useMemo(() => {
       if (!eqNameQuery) return [];
-      const q = eqNameQuery.toLowerCase().trim();
+      const q = String(eqNameQuery).toLowerCase().trim();
 
       // We filter the unique list by Name this time
       return uniqueEquipmentHistory
@@ -189,15 +179,14 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
 
   const handleHistoricalSelect = (order: Order) => {
       // 1. Fill Header
-      setEqNumberQuery(order.equipmentNumber);
-      setEqNameQuery(order.equipmentName || ''); 
-      if (order.customerName) setCustomerQuery(order.customerName);
+      setEqNumberQuery(String(order.equipmentNumber));
+      setEqNameQuery(String(order.equipmentName || '')); 
+      if (order.customerName) setCustomerQuery(String(order.customerName));
       
       // 2. Find ALL items belonging to this Equipment in that Past Order
-      // (This still needs to search the full history to get all items of that specific past order)
       const relatedItems = historicalOrders.filter(o => 
-          o.orderNumber === order.orderNumber && 
-          o.equipmentNumber === order.equipmentNumber
+          String(o.orderNumber) === String(order.orderNumber) && 
+          String(o.equipmentNumber) === String(order.equipmentNumber)
       );
 
       // 3. Convert to Cart Items
@@ -242,7 +231,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
   // --- Logic: Search Inventory Product (The Service Item) ---
   const productSuggestions = React.useMemo(() => {
       if (!productNameQuery) return [];
-      const q = productNameQuery.toLowerCase();
+      const q = String(productNameQuery).toLowerCase();
       // Safe string check
       return inventory.filter(p => String(p.name || '').toLowerCase().includes(q)).slice(0, 8);
   }, [productNameQuery, inventory]);
@@ -266,7 +255,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
 
   const filteredCustomers = useMemo(() => {
       if (!customerQuery) return [];
-      const q = customerQuery.toLowerCase();
+      const q = String(customerQuery).toLowerCase();
       return customers.filter(c => String(c.name || '').toLowerCase().includes(q)).slice(0, 8);
   }, [customers, customerQuery]);
 
@@ -515,7 +504,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
                                 className="px-4 py-3 hover:bg-brand-50 cursor-pointer border-b border-slate-50 last:border-none group"
                                 >
                                     <div className="flex justify-between items-start">
-                                        <span className="font-mono font-bold text-slate-700 text-sm">{item.equipmentNumber}</span>
+                                        <span className="font-mono font-bold text-slate-700 text-sm">{String(item.equipmentNumber)}</span>
                                         <span className="text-xs text-slate-400">{new Date(item.createDate).toLocaleDateString()}</span>
                                     </div>
                                     <div className="text-sm font-medium text-slate-800 my-0.5">{item.equipmentName}</div>
@@ -561,7 +550,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ onOrderCreated, copyData }
                                 >
                                     <div className="flex justify-between items-center mb-1">
                                         <span className="text-sm font-bold text-slate-800">{item.equipmentName}</span>
-                                        <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-500">{item.equipmentNumber}</span>
+                                        <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-500">{String(item.equipmentNumber)}</span>
                                     </div>
                                     <div className="text-xs text-slate-500">客戶: {item.customerName}</div>
                                     <div className="mt-1 text-xs text-slate-400 group-hover:text-brand-700 flex items-center gap-1">

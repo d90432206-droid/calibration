@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { ViewState } from '../types';
 import { LayoutDashboard, PlusCircle, List, Settings, Database, LogOut, Wifi, WifiOff, CloudLightning } from 'lucide-react';
@@ -67,7 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
         {/* Logo Image Replacement */}
         <div className="flex-shrink-0">
             <img 
-                src="logo.png" 
+                src="/logo.png" 
                 alt="Logo" 
                 className="h-10 w-auto object-contain"
                 onError={(e) => {

@@ -1,4 +1,3 @@
-
 import { Order, Product, Customer, CalibrationStatus, CalibrationType, Technician } from '../types';
 
 // Mock Data (Fallback only)
@@ -63,6 +62,8 @@ class HybridGasService {
         let newKey = key.charAt(0).toLowerCase() + key.slice(1);
         // Special case: "ID" -> "id"
         if (key === 'ID') newKey = 'id';
+        // Special case: "Technicians" (GAS often returns stringified JSON, parse it here if needed, 
+        // though our Code.gs usually handles parsing. Just in case.)
         
         newObj[newKey] = this.normalizeData(data[key]);
       });
@@ -74,7 +75,8 @@ class HybridGasService {
   // --- API Caller (Standard fetch) ---
   private async callApi<T>(action: string, payload?: any): Promise<T> {
       try {
-          // Send as JSON body (matches the Code.gs doPost JSON.parse)
+          console.log(`📡 Sending API Request: [${action}]`);
+          
           const response = await fetch(this.apiUrl, {
               method: 'POST',
               body: JSON.stringify({ action, payload })
@@ -85,10 +87,22 @@ class HybridGasService {
           if (!json.success && (json.status === 'error' || json.error)) {
               throw new Error(json.error || 'API Error');
           }
+
+          // Debug log for data structure
+          if (Array.isArray(json.data) && json.data.length > 0) {
+              console.log(`📥 API Response [${action}] Sample Key Check:`, Object.keys(json.data[0]));
+          }
+
           // Normalize data keys before returning
-          return this.normalizeData(json.data) as T;
+          const normalized = this.normalizeData(json.data);
+          
+          if (Array.isArray(normalized) && normalized.length > 0) {
+             console.log(`✨ Normalized Data [${action}] Sample Key Check:`, Object.keys(normalized[0]));
+          }
+
+          return normalized as T;
       } catch (error) {
-          console.error(`API Call Failed [${action}]:`, error);
+          console.error(`❌ API Call Failed [${action}]:`, error);
           throw error;
       }
   }
@@ -103,10 +117,16 @@ class HybridGasService {
                 data = typeof response === 'string' ? JSON.parse(response) : response; 
             } 
             catch (e) { /* ignore */ }
+            
+            console.log(`📥 GAS Response [${functionName}] Raw:`, data);
+            
             // Normalize data keys before returning
             resolve(this.normalizeData(data));
         })
-        .withFailureHandler((error: any) => reject(error))
+        .withFailureHandler((error: any) => {
+            console.error(`❌ GAS Call Failed [${functionName}]:`, error);
+            reject(error);
+        })
         [functionName](...args);
     });
   }
